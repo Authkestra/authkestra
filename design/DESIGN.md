@@ -10,7 +10,7 @@ Consumers copy `tokens.css` verbatim:
 | --- | --- | --- |
 | Playground | `Authkestra/playground` | `apps/web/app/tokens.css` |
 | Docs | `Authkestra/docs` | `src/styles/tokens.css` |
-| Landing | `marcjazz/authkestra` | `landing/src/styles/tokens.css` |
+| Landing | `Authkestra/landing` | `src/styles/tokens.css` |
 
 Each copy carries a header saying where it came from. Change the canonical file,
 then re-copy — never patch a copy in place.

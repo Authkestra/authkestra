@@ -76,6 +76,10 @@ ignore = [
                          # semver-compatible fix exists upstream yet (fixed in
                          # h2 0.4.16+, which actix-http doesn't pin). Remove
                          # once actix-web/actix-http moves to h2 0.4.x.
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5 timing variability, via
+                         # jsonwebtoken 11 -> p256 0.13.2 / p384 0.13.1 ->
+                         # elliptic-curve 0.13.8; fixed in crypto-bigint 0.7.6+
+                         # which has no stable elliptic-curve 0.14 release yet.
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
