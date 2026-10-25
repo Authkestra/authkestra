@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - 'landing/**'
       - 'design/**'
       - 'docs/**'
       - '**.md'
@@ -13,7 +12,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths-ignore:
-      - 'landing/**'
       - 'design/**'
       - 'docs/**'
       - '**.md'

@@ -34,7 +34,6 @@ exclude = [
     "examples/**/*",
     ".github/**/*",
     "docs/**/*",
-    "landing/**/*",
     "design/**/*",
     "benches/**/*",
     ".gitignore",

@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <path d="M5.5 27.5 16 5l10.5 22.5" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="ink"/>
-  <rect x="10" y="17.6" width="12" height="2.8" rx="1.4" fill="#ce422b"/>
-  <style>
-    .ink { stroke: #18181b }
-    @media (prefers-color-scheme: dark) { .ink { stroke: #fafafa } }
-  </style>
-</svg>
