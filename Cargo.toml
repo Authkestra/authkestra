@@ -23,7 +23,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.13.1"
+version = "0.13.2"
 repository = "https://github.com/marcjazz/authkestra"
 license = "MIT OR Apache-2.0"
 keywords = ["authentication", "oauth2", "oidc", "webauthn", "passwordless"]
@@ -49,22 +49,22 @@ exclude = [
 # features of a sibling off. Cargo ignores `default-features = false` on an
 # inherited dependency unless the workspace entry sets it too, which is what
 # lets the TLS-backend choice below reach every crate in the graph.
-authkestra-engine = { version = "0.13.1", path = "crates/authkestra-engine", default-features = false }
-authkestra-providers = { version = "0.13.1", path = "crates/authkestra-providers", default-features = false }
-authkestra-axum = { version = "0.13.1", path = "crates/authkestra-axum", default-features = false }
-authkestra-macros = { version = "0.13.1", path = "crates/authkestra-macros", default-features = false }
-authkestra-oidc = { version = "0.13.1", path = "crates/authkestra-oidc", default-features = false }
-authkestra-actix = { version = "0.13.1", path = "crates/authkestra-actix", default-features = false }
-authkestra-resource = { version = "0.13.1", path = "crates/authkestra-resource", default-features = false }
+authkestra-engine = { version = "0.13.2", path = "crates/authkestra-engine", default-features = false }
+authkestra-providers = { version = "0.13.2", path = "crates/authkestra-providers", default-features = false }
+authkestra-axum = { version = "0.13.2", path = "crates/authkestra-axum", default-features = false }
+authkestra-macros = { version = "0.13.2", path = "crates/authkestra-macros", default-features = false }
+authkestra-oidc = { version = "0.13.2", path = "crates/authkestra-oidc", default-features = false }
+authkestra-actix = { version = "0.13.2", path = "crates/authkestra-actix", default-features = false }
+authkestra-resource = { version = "0.13.2", path = "crates/authkestra-resource", default-features = false }
 
-authkestra-op = { version = "0.13.1", path = "crates/authkestra-op", default-features = false }
-authkestra-store-sqlx = { version = "0.13.1", path = "crates/authkestra-store-sqlx", default-features = false }
-authkestra-store-testsuite = { version = "0.13.1", path = "crates/authkestra-store-testsuite" }
-authkestra-devsig = { version = "0.13.1", path = "crates/authkestra-devsig", default-features = false }
-authkestra-crypto-util = { version = "0.13.1", path = "crates/authkestra-crypto-util", default-features = false }
-authkestra-policy = { version = "0.13.1", path = "crates/authkestra-policy", default-features = false }
-authkestra-ssf = { version = "0.13.1", path = "crates/authkestra-ssf", default-features = false }
-authkestra-mcp = { version = "0.13.1", path = "crates/authkestra-mcp", default-features = false }
+authkestra-op = { version = "0.13.2", path = "crates/authkestra-op", default-features = false }
+authkestra-store-sqlx = { version = "0.13.2", path = "crates/authkestra-store-sqlx", default-features = false }
+authkestra-store-testsuite = { version = "0.13.2", path = "crates/authkestra-store-testsuite" }
+authkestra-devsig = { version = "0.13.2", path = "crates/authkestra-devsig", default-features = false }
+authkestra-crypto-util = { version = "0.13.2", path = "crates/authkestra-crypto-util", default-features = false }
+authkestra-policy = { version = "0.13.2", path = "crates/authkestra-policy", default-features = false }
+authkestra-ssf = { version = "0.13.2", path = "crates/authkestra-ssf", default-features = false }
+authkestra-mcp = { version = "0.13.2", path = "crates/authkestra-mcp", default-features = false }
 
 
 rand = "0.9.2"
