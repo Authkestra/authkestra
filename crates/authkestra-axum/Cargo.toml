@@ -17,6 +17,8 @@ authkestra-macros = { workspace = true, optional = true, features = ["axum"] }
 authkestra-op = { workspace = true, optional = true, default-features = false }
 authkestra-mcp = { workspace = true, optional = true, default-features = false }
 authkestra-devsig = { workspace = true, optional = true }
+authkestra-policy = { workspace = true, optional = true }
+authkestra-ssf = { workspace = true, optional = true, default-features = false }
 axum = { version = "0.8.8", features = ["macros"] }
 jsonwebtoken = "11"
 serde = { version = "1.0", features = ["derive"] }
@@ -48,6 +50,13 @@ token = []
 resource = ["dep:authkestra-resource"]
 op = ["dep:authkestra-op", "session", "token"]
 mcp = ["dep:authkestra-mcp"]
+policy = [
+    "dep:authkestra-policy",
+    "dep:authkestra-resource",
+    "authkestra-resource/policy",
+    "authkestra-mcp?/policy",
+]
+ssf = ["dep:authkestra-ssf", "authkestra-ssf/session"]
 captcha = ["authkestra-engine/captcha"]
 devsig = [
     "dep:authkestra-devsig",
@@ -64,12 +73,14 @@ rustls-aws-lc-rs = [
     "authkestra-resource?/rustls-aws-lc-rs",
     "authkestra-op?/rustls-aws-lc-rs",
     "authkestra-mcp?/rustls-aws-lc-rs",
+    "authkestra-ssf?/rustls-aws-lc-rs",
 ]
 rustls-no-provider = [
     "authkestra-engine/rustls-no-provider",
     "authkestra-resource?/rustls-no-provider",
     "authkestra-op?/rustls-no-provider",
     "authkestra-mcp?/rustls-no-provider",
+    "authkestra-ssf?/rustls-no-provider",
 ]
 
 [dev-dependencies]
@@ -109,3 +120,16 @@ required-features = ["devsig"]
 [[test]]
 name = "mcp_integration"
 required-features = ["mcp"]
+
+[[test]]
+name = "policy_integration"
+required-features = ["policy"]
+
+[[test]]
+name = "ssf_integration"
+required-features = ["ssf"]
+
+[[test]]
+name = "challenger_axum_ssf_tests"
+required-features = ["ssf"]
+

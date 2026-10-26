@@ -121,6 +121,7 @@ rustls-aws-lc-rs = [
     "authkestra-resource?/rustls-aws-lc-rs",
     "authkestra-op?/rustls-aws-lc-rs",
     "authkestra-mcp?/rustls-aws-lc-rs",
+    "authkestra-ssf?/rustls-aws-lc-rs",
 ]
 rustls-no-provider = [
     "authkestra-engine?/rustls-no-provider",
@@ -131,6 +132,7 @@ rustls-no-provider = [
     "authkestra-resource?/rustls-no-provider",
     "authkestra-op?/rustls-no-provider",
     "authkestra-mcp?/rustls-no-provider",
+    "authkestra-ssf?/rustls-no-provider",
 ]
 
 # Core features
@@ -145,13 +147,21 @@ rustls-no-provider = [
 
 oidc = ["dep:authkestra-oidc"]
 resource = ["dep:authkestra-resource", "authkestra-actix?/resource", "authkestra-axum?/resource"]
-# Shared Signals Framework / CAEP ingestion. No adapter feature to forward: `authkestra-ssf` is
-# framework-agnostic and ships no axum/actix wiring yet (see authkestra#25).
-ssf = ["dep:authkestra-ssf"]
+# Shared Signals Framework / CAEP ingestion with Axum/Actix push receiver routes and session revocation.
+ssf = [
+    "dep:authkestra-ssf",
+    "authkestra-axum?/ssf",
+    "authkestra-actix?/ssf",
+]
 
-# Cedar policy engine (authkestra#21). Proof of concept: it evaluates policies, but nothing in
-# the adapters or in `authkestra-resource` calls it yet. See docs/rfc-008-policy-engine.md.
-policy = ["dep:authkestra-policy"]
+# Cedar policy engine for ABAC authorization guards, extractors, and MCP tool enforcement.
+policy = [
+    "dep:authkestra-policy",
+    "authkestra-resource?/policy",
+    "authkestra-mcp?/policy",
+    "authkestra-axum?/policy",
+    "authkestra-actix?/policy",
+]
 
 # Model Context Protocol (MCP) server security guard, HITL step-up approval & zero-trust token broker
 mcp = ["dep:authkestra-mcp", "authkestra-axum?/mcp", "authkestra-actix?/mcp"]

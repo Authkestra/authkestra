@@ -534,7 +534,9 @@ dependencies = [
  "authkestra-macros",
  "authkestra-mcp",
  "authkestra-op",
+ "authkestra-policy",
  "authkestra-resource",
+ "authkestra-ssf",
  "base64 0.22.1",
  "chrono",
  "futures",
@@ -558,7 +560,9 @@ dependencies = [
  "authkestra-macros",
  "authkestra-mcp",
  "authkestra-op",
+ "authkestra-policy",
  "authkestra-resource",
+ "authkestra-ssf",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -712,6 +716,7 @@ dependencies = [
  "async-trait",
  "authkestra-crypto-util",
  "authkestra-engine",
+ "authkestra-policy",
  "authkestra-resource",
  "chrono",
  "hex",
@@ -809,6 +814,7 @@ version = "0.13.2"
 dependencies = [
  "async-trait",
  "authkestra-engine",
+ "authkestra-policy",
  "base64 0.22.1",
  "chrono",
  "ed25519-dalek",
@@ -832,6 +838,7 @@ name = "authkestra-ssf"
 version = "0.13.2"
 dependencies = [
  "async-trait",
+ "authkestra-engine",
  "base64 0.22.1",
  "jsonwebtoken",
  "serde",

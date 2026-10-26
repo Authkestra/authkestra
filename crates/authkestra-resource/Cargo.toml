@@ -37,9 +37,11 @@ chrono = { version = "0.4", features = ["serde"] }
 # checks — the same crate `authkestra_engine::token::dpop` already uses for
 # `htu` canonicalization, so parsing here agrees with parsing there.
 url = { workspace = true }
+authkestra-policy = { workspace = true, optional = true }
 
 [features]
 default = ["rustls-aws-lc-rs"]
+policy = ["dep:authkestra-policy"]
 
 # TLS backend, forwarded to authkestra-engine. See its documentation for the
 # `rustls-no-provider` contract.

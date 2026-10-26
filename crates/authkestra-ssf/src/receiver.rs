@@ -78,6 +78,12 @@ pub trait SetHandler: Send + Sync + 'static {
         -> Result<(), HandlerError>;
 }
 
+/// Trait for handling Shared Signals Framework (SSF) and CAEP events.
+///
+/// Aliases and extends [`SetHandler`].
+pub trait SsfEventHandler: SetHandler {}
+impl<T: SetHandler + ?Sized> SsfEventHandler for T {}
+
 /// A [`SetHandler`] that only traces what it received.
 ///
 /// Useful as a first deployment step — turn on delivery, watch the events arrive, and confirm
@@ -230,6 +236,11 @@ impl PushReceiver {
     pub fn with_handler(mut self, handler: Arc<dyn SetHandler>) -> Self {
         self.handlers.push(handler);
         self
+    }
+
+    /// Adds an SSF event handler. Equivalent to [`PushReceiver::with_handler`].
+    pub fn with_event_handler(self, handler: Arc<dyn SetHandler>) -> Self {
+        self.with_handler(handler)
     }
 
     /// Handles one SET Transmission Request (RFC 8935 §2.1).

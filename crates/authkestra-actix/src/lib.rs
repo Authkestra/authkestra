@@ -41,6 +41,12 @@ pub mod devsig;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+#[cfg(feature = "ssf")]
+pub mod ssf;
+
+#[cfg(feature = "policy")]
+pub mod policy;
+
 #[cfg(feature = "macros")]
 pub use authkestra_macros::ActixState;
 pub use helpers::actix_login_handler;
@@ -55,6 +61,13 @@ pub use devsig::{AuthDeviceSignature, DeviceSignatureAuth};
 
 #[cfg(feature = "mcp")]
 pub use mcp::{mcp_actix_scope, McpExt};
+
+#[cfg(feature = "ssf")]
+pub use ssf::ssf_actix_scope;
+
+#[cfg(feature = "policy")]
+pub use policy::AuthPolicyGuard;
+
 pub trait ActixExt<S, T> {
     fn actix_scope(&self) -> actix_web::Scope;
 }

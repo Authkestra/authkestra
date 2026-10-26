@@ -103,3 +103,23 @@ fn mcp_is_reachable() {
     #[allow(unused_imports)]
     use authkestra::mcp::{DownstreamTokenBroker, McpRouter, McpSecurityTier};
 }
+
+#[test]
+fn policy_is_reachable() {
+    #[allow(unused_imports)]
+    use authkestra::actix::AuthPolicyGuard as ActixPolicyGuard;
+    #[allow(unused_imports)]
+    use authkestra::axum::AuthPolicyGuard as AxumPolicyGuard;
+    #[allow(unused_imports)]
+    use authkestra::policy::{CedarPolicyEngine, CedarPolicyEngineBuilder, PolicyEngine};
+}
+
+#[test]
+fn ssf_is_reachable() {
+    #[allow(unused_imports)]
+    use authkestra::actix::ssf_actix_scope;
+    #[allow(unused_imports)]
+    use authkestra::axum::ssf_axum_router;
+    #[allow(unused_imports)]
+    use authkestra::ssf::{PushReceiver, SetVerifier, SsfEventHandler};
+}
