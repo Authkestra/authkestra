@@ -714,7 +714,12 @@ async fn test_adversarial_aead_tamper_stress_matrix() {
     // Vector F: Swapped bytes
     {
         let mut b = valid_bytes.clone();
-        b.swap(14, 15);
+        // Find two distinct adjacent ciphertext bytes to swap so random identical
+        // byte pairs (1/256 chance) don't result in a no-op swap.
+        let swap_idx = (12..total_len - 17)
+            .find(|&i| b[i] != b[i + 1])
+            .expect("ciphertext must contain at least two distinct adjacent bytes");
+        b.swap(swap_idx, swap_idx + 1);
         tamper_vectors.push(("Swapped adjacent ciphertext bytes", b));
     }
 
