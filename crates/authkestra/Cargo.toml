@@ -3,12 +3,12 @@ exclude.workspace = true
 name = "authkestra"
 version.workspace = true
 edition.workspace = true
-description = "A modular authentication framework for Rust"
+description = "The compile-time safe identity and AI agent authorization engine for Rust"
 repository.workspace = true
 license.workspace = true
-keywords = ["authentication", "oauth2", "oidc", "passwordless", "webauthn"]
+keywords = ["authentication", "oauth2", "oidc", "mcp", "ai-agents"]
 categories = ["authentication", "web-programming"]
-readme.workspace = true
+readme = "README.md"
 
 [dependencies]
 authkestra-engine = { workspace = true, optional = true, default-features = false }
@@ -21,6 +21,7 @@ authkestra-op = { workspace = true, optional = true, default-features = false }
 authkestra-devsig = { workspace = true, optional = true }
 authkestra-policy = { workspace = true, optional = true, default-features = false }
 authkestra-ssf = { workspace = true, optional = true, default-features = false }
+authkestra-mcp = { workspace = true, optional = true, default-features = false }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
@@ -33,11 +34,12 @@ authkestra-resource = { workspace = true }
 authkestra-providers = { workspace = true, features = ["github", "google", "discord"] }
 authkestra-oidc = { workspace = true }
 authkestra-op = { workspace = true }
+authkestra-mcp = { workspace = true }
 authkestra-store-sqlx = { workspace = true, features = ["sqlite"] }
 authkestra-macros = { workspace = true }
 authkestra-devsig = { workspace = true }
-authkestra-axum = { workspace = true, features = ["devsig", "macros", "session", "token", "resource", "op", "captcha"] }
-authkestra-actix = { workspace = true, features = ["devsig", "macros", "session", "token", "resource", "op", "captcha"] }
+authkestra-axum = { workspace = true, features = ["devsig", "macros", "session", "token", "resource", "op", "captcha", "mcp"] }
+authkestra-actix = { workspace = true, features = ["devsig", "macros", "session", "token", "resource", "op", "captcha", "mcp"] }
 
 dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
@@ -104,6 +106,7 @@ full = [
     "devsig",
     "policy",
     "ssf",
+    "mcp",
 ]
 engine = ["dep:authkestra-engine"]
 
@@ -117,6 +120,7 @@ rustls-aws-lc-rs = [
     "authkestra-providers?/rustls-aws-lc-rs",
     "authkestra-resource?/rustls-aws-lc-rs",
     "authkestra-op?/rustls-aws-lc-rs",
+    "authkestra-mcp?/rustls-aws-lc-rs",
 ]
 rustls-no-provider = [
     "authkestra-engine?/rustls-no-provider",
@@ -126,6 +130,7 @@ rustls-no-provider = [
     "authkestra-providers?/rustls-no-provider",
     "authkestra-resource?/rustls-no-provider",
     "authkestra-op?/rustls-no-provider",
+    "authkestra-mcp?/rustls-no-provider",
 ]
 
 # Core features
@@ -147,6 +152,9 @@ ssf = ["dep:authkestra-ssf"]
 # Cedar policy engine (authkestra#21). Proof of concept: it evaluates policies, but nothing in
 # the adapters or in `authkestra-resource` calls it yet. See docs/rfc-008-policy-engine.md.
 policy = ["dep:authkestra-policy"]
+
+# Model Context Protocol (MCP) server security guard, HITL step-up approval & zero-trust token broker
+mcp = ["dep:authkestra-mcp", "authkestra-axum?/mcp", "authkestra-actix?/mcp"]
 
 # Web frameworks
 axum = ["dep:authkestra-axum", "authkestra-axum/macros", "authkestra-axum/session", "authkestra-axum/token", "authkestra-axum/resource"]

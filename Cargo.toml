@@ -64,6 +64,8 @@ authkestra-devsig = { version = "0.13.1", path = "crates/authkestra-devsig", def
 authkestra-crypto-util = { version = "0.13.1", path = "crates/authkestra-crypto-util", default-features = false }
 authkestra-policy = { version = "0.13.1", path = "crates/authkestra-policy", default-features = false }
 authkestra-ssf = { version = "0.13.1", path = "crates/authkestra-ssf", default-features = false }
+authkestra-mcp = { version = "0.13.1", path = "crates/authkestra-mcp", default-features = false }
+
 
 rand = "0.9.2"
 url = "2.5"

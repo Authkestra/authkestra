@@ -15,6 +15,7 @@ authkestra-engine = { workspace = true, default-features = false }
 authkestra-resource = { workspace = true, optional = true, default-features = false }
 authkestra-macros = { workspace = true, optional = true, features = ["axum"] }
 authkestra-op = { workspace = true, optional = true, default-features = false }
+authkestra-mcp = { workspace = true, optional = true, default-features = false }
 authkestra-devsig = { workspace = true, optional = true }
 axum = { version = "0.8.8", features = ["macros"] }
 jsonwebtoken = "11"
@@ -46,6 +47,7 @@ session = []
 token = []
 resource = ["dep:authkestra-resource"]
 op = ["dep:authkestra-op", "session", "token"]
+mcp = ["dep:authkestra-mcp"]
 captcha = ["authkestra-engine/captcha"]
 devsig = [
     "dep:authkestra-devsig",
@@ -61,15 +63,19 @@ rustls-aws-lc-rs = [
     "authkestra-engine/rustls-aws-lc-rs",
     "authkestra-resource?/rustls-aws-lc-rs",
     "authkestra-op?/rustls-aws-lc-rs",
+    "authkestra-mcp?/rustls-aws-lc-rs",
 ]
 rustls-no-provider = [
     "authkestra-engine/rustls-no-provider",
     "authkestra-resource?/rustls-no-provider",
     "authkestra-op?/rustls-no-provider",
+    "authkestra-mcp?/rustls-no-provider",
 ]
 
 [dev-dependencies]
 async-trait = "0.1"
+authkestra-engine = { workspace = true, features = ["memory"] }
+http-body-util = "0.1"
 
 # Test-only: the OAuth callback's three failure modes all return 401, so the
 # only thing that tells a missing state cookie apart from an undecryptable one
@@ -99,3 +105,7 @@ required-features = ["macros", "session", "token", "op"]
 [[test]]
 name = "devsig_test"
 required-features = ["devsig"]
+
+[[test]]
+name = "mcp_integration"
+required-features = ["mcp"]
