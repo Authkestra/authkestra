@@ -1,6 +1,14 @@
+pub mod error;
+pub use error::CryptoError;
+
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signature, VerifyingKey};
+use rand::RngCore;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -122,6 +130,59 @@ pub fn verify_ed25519_signature_strict(
     })
 }
 
+/// 12-byte nonce size standard for AES-256-GCM (NIST SP 800-38D).
+pub const AES_GCM_NONCE_SIZE: usize = 12;
+
+/// 16-byte authentication tag size standard for AES-256-GCM.
+pub const AES_GCM_TAG_SIZE: usize = 16;
+
+/// Minimum valid ciphertext length (nonce + tag = 28 bytes).
+pub const AES_GCM_MIN_CIPHERTEXT_SIZE: usize = AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE;
+
+/// Encrypts `plaintext` using AES-256-GCM with the provided 32-byte `key`.
+///
+/// Generates a cryptographically secure random 12-byte nonce and prepends it
+/// to the resulting ciphertext + 16-byte authentication tag.
+///
+/// Output format: `[12-byte nonce | ciphertext + 16-byte tag]`.
+pub fn encrypt_aes_256_gcm(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes256Gcm::new(key.into());
+    let mut nonce_bytes = [0u8; AES_GCM_NONCE_SIZE];
+    rand::rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from(nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| CryptoError::Encryption(e.to_string()))?;
+
+    let mut combined = Vec::with_capacity(AES_GCM_NONCE_SIZE + ciphertext.len());
+    combined.extend_from_slice(&nonce_bytes);
+    combined.extend_from_slice(&ciphertext);
+
+    Ok(combined)
+}
+
+/// Decrypts `ciphertext` using AES-256-GCM with the provided 32-byte `key`.
+///
+/// Expects the input to follow the `[12-byte nonce | ciphertext + 16-byte tag]` format.
+/// Returns [`CryptoError::CiphertextTooShort`] if input length is less than 28 bytes.
+/// Returns [`CryptoError::Decryption`] if authentication tag verification fails (e.g. tampering or wrong key).
+pub fn decrypt_aes_256_gcm(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+    if ciphertext.len() < AES_GCM_MIN_CIPHERTEXT_SIZE {
+        return Err(CryptoError::CiphertextTooShort(ciphertext.len()));
+    }
+
+    let (nonce_bytes, payload) = ciphertext.split_at(AES_GCM_NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(key.into());
+
+    let plaintext = cipher
+        .decrypt(nonce, payload)
+        .map_err(|e| CryptoError::Decryption(e.to_string()))?;
+
+    Ok(plaintext)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +287,93 @@ mod tests {
             matches!(err, EdDsaVerifyError::Signature(_)),
             "expected a Signature rejection, got {err:?}"
         );
+    }
+
+    const TEST_KEY: [u8; 32] = [42u8; 32];
+    const ALT_KEY: [u8; 32] = [99u8; 32];
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let plaintext = b"Authkestra Zero-Trust Token Vault payload";
+        let encrypted = encrypt_aes_256_gcm(plaintext, &TEST_KEY).expect("encryption succeeds");
+        assert!(encrypted.len() >= AES_GCM_MIN_CIPHERTEXT_SIZE);
+
+        let decrypted = decrypt_aes_256_gcm(&encrypted, &TEST_KEY).expect("decryption succeeds");
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_empty_plaintext_roundtrip() {
+        let plaintext = b"";
+        let encrypted = encrypt_aes_256_gcm(plaintext, &TEST_KEY).expect("encryption succeeds");
+        assert_eq!(encrypted.len(), AES_GCM_MIN_CIPHERTEXT_SIZE);
+
+        let decrypted = decrypt_aes_256_gcm(&encrypted, &TEST_KEY).expect("decryption succeeds");
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_rejected() {
+        let plaintext = b"critical financial instruction: transfer $50";
+        let mut encrypted = encrypt_aes_256_gcm(plaintext, &TEST_KEY).expect("encryption succeeds");
+
+        // Tamper with ciphertext payload byte
+        let last_idx = encrypted.len() - 1;
+        encrypted[last_idx] ^= 0x01;
+
+        let err =
+            decrypt_aes_256_gcm(&encrypted, &TEST_KEY).expect_err("tampered ciphertext must fail");
+        assert!(matches!(err, CryptoError::Decryption(_)));
+    }
+
+    #[test]
+    fn test_tampered_nonce_rejected() {
+        let plaintext = b"secret token";
+        let mut encrypted = encrypt_aes_256_gcm(plaintext, &TEST_KEY).expect("encryption succeeds");
+
+        // Tamper with nonce byte (first 12 bytes)
+        encrypted[0] ^= 0xff;
+
+        let err = decrypt_aes_256_gcm(&encrypted, &TEST_KEY).expect_err("tampered nonce must fail");
+        assert!(matches!(err, CryptoError::Decryption(_)));
+    }
+
+    #[test]
+    fn test_wrong_key_rejected() {
+        let plaintext = b"super secret api token";
+        let encrypted = encrypt_aes_256_gcm(plaintext, &TEST_KEY).expect("encryption succeeds");
+
+        let err = decrypt_aes_256_gcm(&encrypted, &ALT_KEY).expect_err("wrong key must fail");
+        assert!(matches!(err, CryptoError::Decryption(_)));
+    }
+
+    #[test]
+    fn test_short_ciphertext_rejected() {
+        assert!(matches!(
+            decrypt_aes_256_gcm(&[], &TEST_KEY),
+            Err(CryptoError::CiphertextTooShort(0))
+        ));
+        assert!(matches!(
+            decrypt_aes_256_gcm(&[0u8; 11], &TEST_KEY),
+            Err(CryptoError::CiphertextTooShort(11))
+        ));
+        assert!(matches!(
+            decrypt_aes_256_gcm(&[0u8; 27], &TEST_KEY),
+            Err(CryptoError::CiphertextTooShort(27))
+        ));
+    }
+
+    #[test]
+    fn test_nonce_uniqueness() {
+        let plaintext = b"identical plaintext";
+        let enc1 = encrypt_aes_256_gcm(plaintext, &TEST_KEY).unwrap();
+        let enc2 = encrypt_aes_256_gcm(plaintext, &TEST_KEY).unwrap();
+
+        assert_ne!(
+            enc1[..AES_GCM_NONCE_SIZE],
+            enc2[..AES_GCM_NONCE_SIZE],
+            "nonces must be unique per encryption"
+        );
+        assert_ne!(enc1, enc2, "ciphertexts must differ due to random nonces");
     }
 }

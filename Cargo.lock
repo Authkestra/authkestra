@@ -579,8 +579,10 @@ dependencies = [
 name = "authkestra-crypto-util"
 version = "0.13.1"
 dependencies = [
+ "aes-gcm",
  "base64 0.22.1",
  "ed25519-dalek",
+ "rand 0.9.5",
  "thiserror 2.0.19",
  "tracing",
 ]
