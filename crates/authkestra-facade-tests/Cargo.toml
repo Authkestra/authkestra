@@ -38,6 +38,7 @@ authkestra = { path = "../authkestra", features = [
     "macros",
     "op",
     "devsig",
+    "mcp",
 ] }
 # None of these are workspace crates, so none of them mask anything. The web
 # frameworks are needed only to name the types the state derives generate

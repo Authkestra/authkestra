@@ -1,12 +1,12 @@
 [package]
 name = "authkestra-crypto-util"
-description = "Internal cryptographic utilities for the authkestra framework, specifically for strict signature and key verification"
+description = "Internal cryptographic utilities for the authkestra framework, specifically for strict signature and key verification and AEAD encryption"
 exclude.workspace = true
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
-keywords = ["ed25519", "signature", "jwk", "verification", "cryptography"]
+keywords = ["ed25519", "aes-gcm", "signature", "jwk", "cryptography"]
 categories = ["cryptography"]
 
 [dependencies]
@@ -14,6 +14,8 @@ ed25519-dalek = "2"
 base64 = "0.22"
 thiserror = "2"
 tracing = "0.1"
+aes-gcm = "0.10"
+rand = { workspace = true }
 
 [features]
 default = []

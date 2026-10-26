@@ -97,3 +97,9 @@ fn the_state_derives_are_reachable() {
     #[allow(unused_imports)]
     use authkestra::axum::AxumState;
 }
+
+#[test]
+fn mcp_is_reachable() {
+    #[allow(unused_imports)]
+    use authkestra::mcp::{DownstreamTokenBroker, McpRouter, McpSecurityTier};
+}

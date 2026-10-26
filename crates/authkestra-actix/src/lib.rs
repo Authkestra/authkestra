@@ -38,6 +38,9 @@ pub mod op;
 #[cfg(feature = "devsig")]
 pub mod devsig;
 
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 #[cfg(feature = "macros")]
 pub use authkestra_macros::ActixState;
 pub use helpers::actix_login_handler;
@@ -49,6 +52,9 @@ pub use op::OpExt;
 
 #[cfg(feature = "devsig")]
 pub use devsig::{AuthDeviceSignature, DeviceSignatureAuth};
+
+#[cfg(feature = "mcp")]
+pub use mcp::{mcp_actix_scope, McpExt};
 pub trait ActixExt<S, T> {
     fn actix_scope(&self) -> actix_web::Scope;
 }

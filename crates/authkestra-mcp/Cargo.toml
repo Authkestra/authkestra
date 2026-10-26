@@ -1,0 +1,39 @@
+[package]
+name = "authkestra-mcp"
+description = "Embedded Model Context Protocol (MCP) security, delegated authorization, and cryptographic step-up approval crate for the authkestra framework"
+exclude.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["mcp", "agent", "authorization", "oauth2", "passkey"]
+categories = ["authentication", "web-programming"]
+readme = "README.md"
+
+[dependencies]
+serde_json_canonicalizer = "0.4.1"
+sha2 = { workspace = true }
+aes-gcm = "0.10"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+thiserror = "2"
+tracing = "0.1"
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+authkestra-engine = { workspace = true }
+authkestra-resource = { workspace = true }
+authkestra-crypto-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "macros"] }
+authkestra-engine = { workspace = true, features = ["memory"] }
+
+[features]
+default = ["rustls-aws-lc-rs"]
+
+# TLS backend forwarded to authkestra-engine
+rustls-aws-lc-rs = ["authkestra-engine/rustls-aws-lc-rs"]
+rustls-no-provider = ["authkestra-engine/rustls-no-provider"]

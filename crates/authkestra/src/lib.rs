@@ -88,6 +88,11 @@ pub use authkestra_op as op;
 #[cfg(feature = "devsig")]
 pub use authkestra_devsig as devsig;
 
+/// Embedded Model Context Protocol (MCP) server security guard, JCS parameter binding,
+/// cryptographic step-up approval, and zero-trust downstream token vault.
+#[cfg(feature = "mcp")]
+pub use authkestra_mcp as mcp;
+
 /// Authentication providers.
 pub mod providers {
     #[cfg(feature = "github")]
