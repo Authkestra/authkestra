@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: [engine, webauthn, totp, captcha, memory, redis, sql-sqlite, sql-postgres, sql-mysql, macros, op, devsig]
+        feature: [engine, webauthn, totp, captcha, memory, redis, sql-sqlite, sql-postgres, sql-mysql, macros, op, devsig, mcp]
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust
