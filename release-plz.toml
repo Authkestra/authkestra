@@ -83,3 +83,7 @@ version_group = "authkestra"
 [[package]]
 name = "authkestra-policy"
 version_group = "authkestra"
+
+[[package]]
+name = "authkestra-mcp"
+version_group = "authkestra"
