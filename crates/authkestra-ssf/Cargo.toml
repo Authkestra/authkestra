@@ -25,9 +25,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0.18"
 tracing = "0.1"
+authkestra-engine = { workspace = true, optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+authkestra-engine = { workspace = true, features = ["memory", "rustls-aws-lc-rs"] }
 
 [features]
-default = []
+default = ["rustls-aws-lc-rs"]
+session = ["dep:authkestra-engine"]
+
+# TLS backend forwarded to authkestra-engine
+rustls-aws-lc-rs = ["authkestra-engine?/rustls-aws-lc-rs"]
+rustls-no-provider = ["authkestra-engine?/rustls-no-provider"]

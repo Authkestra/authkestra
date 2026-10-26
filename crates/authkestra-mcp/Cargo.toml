@@ -26,6 +26,7 @@ serde_json = "1.0"
 authkestra-engine = { workspace = true }
 authkestra-resource = { workspace = true }
 authkestra-crypto-util = { workspace = true }
+authkestra-policy = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full", "macros"] }
@@ -33,6 +34,7 @@ authkestra-engine = { workspace = true, features = ["memory"] }
 
 [features]
 default = ["rustls-aws-lc-rs"]
+policy = ["dep:authkestra-policy"]
 
 # TLS backend forwarded to authkestra-engine
 rustls-aws-lc-rs = ["authkestra-engine/rustls-aws-lc-rs"]

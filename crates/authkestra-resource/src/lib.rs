@@ -10,6 +10,11 @@ pub mod jwt;
 pub mod dpop;
 pub use dpop::{DpopJtiRecord, DpopReplayStore, NoDpopReplayStore, DPOP_PROOF_MAX_AGE_SECS};
 
+#[cfg(feature = "policy")]
+pub mod policy;
+#[cfg(feature = "policy")]
+pub use policy::{DefaultPrincipalMapper, PolicyGuard, PrincipalMapper};
+
 /// Policy for controlling the behavior of chained authentication strategies.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AuthPolicy {

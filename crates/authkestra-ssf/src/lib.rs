@@ -83,10 +83,15 @@ pub use caep::{
 pub use error::{SetError, SetErrorCode};
 pub use keys::{KeyResolveError, SetKeyResolver, SingleKeyResolver, StaticKeyResolver};
 pub use receiver::{
-    HandlerError, LoggingHandler, PushReceiver, PushResponse, SetHandler, DEFAULT_MAX_BODY_BYTES,
-    ERROR_CONTENT_LANGUAGE, ERROR_CONTENT_TYPE,
+    HandlerError, LoggingHandler, PushReceiver, PushResponse, SetHandler, SsfEventHandler,
+    DEFAULT_MAX_BODY_BYTES, ERROR_CONTENT_LANGUAGE, ERROR_CONTENT_TYPE,
 };
 pub use replay::{InMemorySetReplayGuard, SetReplayGuard};
 pub use set::{Audience, SecurityEventToken, SET_MEDIA_TYPE, SET_TYP};
 pub use subject::SubjectIdentifier;
 pub use verify::{SetVerifier, SetVerifierBuilder, SetVerifierError, VerifiedSet};
+
+#[cfg(feature = "session")]
+pub mod session;
+#[cfg(feature = "session")]
+pub use session::SessionRevocationHandler;

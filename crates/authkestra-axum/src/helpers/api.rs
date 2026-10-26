@@ -85,6 +85,7 @@ pub fn initiate_oauth_login(
 }
 
 /// Internal helper to finalize the OAuth flow by validating state and exchanging the code.
+#[cfg(any(feature = "session", feature = "token"))]
 async fn finalize_callback_erased(
     flow: &dyn ErasedOAuthFlow,
     cookies: &Cookies,

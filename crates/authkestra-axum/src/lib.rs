@@ -21,6 +21,12 @@ pub mod devsig;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+#[cfg(feature = "ssf")]
+pub mod ssf;
+
+#[cfg(feature = "policy")]
+pub mod policy;
+
 pub use helpers::AxumError;
 #[cfg(feature = "session")]
 pub use helpers::{Session, SessionStore};
@@ -33,6 +39,12 @@ pub use devsig::{AuthDeviceSignature, DeviceSignatureLayer, MissingDeviceIdentit
 
 #[cfg(feature = "mcp")]
 pub use mcp::{mcp_axum_router, McpExt};
+
+#[cfg(feature = "ssf")]
+pub use ssf::ssf_axum_router;
+
+#[cfg(feature = "policy")]
+pub use policy::AuthPolicyGuard;
 
 #[cfg(feature = "macros")]
 extern crate self as authkestra_axum;

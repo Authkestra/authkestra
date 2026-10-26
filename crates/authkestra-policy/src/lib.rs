@@ -102,6 +102,11 @@ mod loader;
 mod request;
 
 pub use engine::{parse_policies, parse_schema, PolicyEngine, PolicyEngineBuilder};
+
+/// Convenience alias matching standard Authkestra terminology.
+pub type CedarPolicyEngine = PolicyEngine;
+/// Convenience alias matching standard Authkestra terminology.
+pub type CedarPolicyEngineBuilder = PolicyEngineBuilder;
 pub use error::PolicyError;
 pub use loader::{EntityRecord, MemoryResourceLoader, ResourceLoader, StaticResourceLoader};
 pub use request::{parse_entity_uid, AuthorizationRequest, AuthorizationRequestBuilder, Decision};

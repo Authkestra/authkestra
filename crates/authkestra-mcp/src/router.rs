@@ -77,6 +77,8 @@ pub struct McpRouter {
     token_broker: Option<Arc<dyn DownstreamTokenBroker>>,
     pending_store: Arc<dyn KvStore<PendingApprovalChallenge>>,
     execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
+    #[cfg(feature = "policy")]
+    policy_engine: Option<Arc<authkestra_policy::CedarPolicyEngine>>,
 }
 
 impl McpRouter {
@@ -86,6 +88,12 @@ impl McpRouter {
         execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
     ) -> McpRouterBuilder {
         McpRouterBuilder::new(pending_store, execution_store)
+    }
+
+    /// Returns a reference to the configured Cedar policy engine, if any.
+    #[cfg(feature = "policy")]
+    pub fn policy_engine(&self) -> Option<&Arc<authkestra_policy::CedarPolicyEngine>> {
+        self.policy_engine.as_ref()
     }
 
     /// Returns the protected resource metadata if configured.
@@ -271,6 +279,90 @@ impl McpRouter {
         }
         if let Some(ref broker) = self.token_broker {
             tool_context = tool_context.with_broker(broker.clone());
+        }
+
+        #[cfg(feature = "policy")]
+        if let Some(ref engine) = self.policy_engine {
+            let principal_str = match identity {
+                Some(ref id) => {
+                    let escaped_ext = id.external_id.replace('\\', "\\\\").replace('"', "\\\"");
+                    if id.provider_id.is_empty() {
+                        format!(r#"User::"{escaped_ext}""#)
+                    } else {
+                        let escaped_prov =
+                            id.provider_id.replace('\\', "\\\\").replace('"', "\\\"");
+                        format!(r#"User::"{escaped_prov}|{escaped_ext}""#)
+                    }
+                }
+                None => r#"User::"anonymous""#.to_string(),
+            };
+
+            let principal = authkestra_policy::parse_entity_uid(&principal_str).map_err(|e| {
+                McpError::Internal(format!("Failed to parse principal entity uid: {e}"))
+            })?;
+            let action = authkestra_policy::parse_entity_uid(r#"Action::"call""#).map_err(|e| {
+                McpError::Internal(format!("Failed to parse action entity uid: {e}"))
+            })?;
+            let escaped_tool = tool.name.replace('\\', "\\\\").replace('"', "\\\"");
+            let resource =
+                authkestra_policy::parse_entity_uid(&format!(r#"Tool::"{escaped_tool}""#))
+                    .map_err(|e| {
+                        McpError::Internal(format!("Failed to parse tool entity uid: {e}"))
+                    })?;
+
+            let tier_str = match &tool.security_tier {
+                McpSecurityTier::Public => "Public",
+                McpSecurityTier::Scoped { .. } => "Scoped",
+                McpSecurityTier::HumanApproved { .. } => "HumanApproved",
+            };
+
+            let req_context = serde_json::json!({
+                "arguments": raw_args,
+                "session_id": session_id,
+                "tier": tier_str,
+            });
+
+            let auth_request = authkestra_policy::AuthorizationRequest::builder()
+                .principal(principal)
+                .action(action)
+                .resource(resource)
+                .context(req_context)
+                .build()
+                .map_err(|e| {
+                    McpError::Internal(format!("Failed to build authorization request: {e}"))
+                })?;
+
+            tracing::debug!(
+                tool = %tool.name,
+                principal = %auth_request.principal,
+                "evaluating Cedar policy for MCP tool call"
+            );
+
+            let decision = engine
+                .is_authorized(&auth_request)
+                .await
+                .map_err(|e| McpError::Internal(format!("Cedar policy evaluation error: {e}")))?;
+
+            if decision.is_allowed() {
+                tracing::info!(
+                    tool = %tool.name,
+                    principal = %auth_request.principal,
+                    reasons = ?decision.reasons(),
+                    "Cedar policy permitted MCP tool call"
+                );
+            } else {
+                tracing::warn!(
+                    tool = %tool.name,
+                    principal = %auth_request.principal,
+                    reasons = ?decision.reasons(),
+                    errors = ?decision.errors(),
+                    "Cedar policy DENIED MCP tool call"
+                );
+                return Err(McpError::Unauthorized(format!(
+                    "Tool call '{}' was denied by policy",
+                    tool.name
+                )));
+            }
         }
 
         match &tool.security_tier {
@@ -556,6 +648,8 @@ pub struct McpRouterBuilder {
     token_broker: Option<Arc<dyn DownstreamTokenBroker>>,
     pending_store: Arc<dyn KvStore<PendingApprovalChallenge>>,
     execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
+    #[cfg(feature = "policy")]
+    policy_engine: Option<Arc<authkestra_policy::CedarPolicyEngine>>,
 }
 
 impl McpRouterBuilder {
@@ -572,7 +666,16 @@ impl McpRouterBuilder {
             token_broker: None,
             pending_store,
             execution_store,
+            #[cfg(feature = "policy")]
+            policy_engine: None,
         }
+    }
+
+    /// Sets the Cedar policy engine for declarative tool authorization.
+    #[cfg(feature = "policy")]
+    pub fn with_policy_engine(mut self, engine: Arc<authkestra_policy::CedarPolicyEngine>) -> Self {
+        self.policy_engine = Some(engine);
+        self
     }
 
     /// Registers a tool in the router.
@@ -615,6 +718,8 @@ impl McpRouterBuilder {
             token_broker: self.token_broker,
             pending_store: self.pending_store,
             execution_store: self.execution_store,
+            #[cfg(feature = "policy")]
+            policy_engine: self.policy_engine,
         }
     }
 }
