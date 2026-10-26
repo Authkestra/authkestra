@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3](https://github.com/Authkestra/authkestra/compare/authkestra-resource-v0.13.2...authkestra-resource-v0.13.3) - 2026-10-26
+
+### Added
+
+- *(policy,ssf)* wire CedarPolicyEngine and OpenID CAEP/SSF receiver into resource, mcp, axum, and actix ([#418](https://github.com/Authkestra/authkestra/pull/418))
+
 ## [0.13.1](https://github.com/marcjazz/authkestra/compare/authkestra-resource-v0.13.0...authkestra-resource-v0.13.1) - 2026-09-26
 
 ### Other
