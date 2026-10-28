@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+
+  path_filters:
+    - "!target/**"
+    - "!**/*.lock"
+    - "!**/*.profraw"
+    - "!lcov.info"
+    - "!design/**"
+    - "!docs/**"
+    - "!plans/**"
+    - "!scratch/**"
+    - "!**/*.md"
+
+  path_instructions:
+    - path: "crates/authkestra-crypto-util/**"
+      instructions: |
+        - Verify all cryptographic comparisons use constant-time operations (e.g. `subtle::ConstantTimeEq`).
+        - Ensure nonces for AEAD encryption (AES-GCM, ChaCha20Poly1305) are unique and generated via secure CSPRNG.
+        - Ensure sensitive keys and plaintext buffers implement `zeroize::Zeroize` and are scrubbed on drop.
+        - Reject any unverified or insecure cryptographic defaults.
+
+    - path: "crates/authkestra-engine/**"
+      instructions: |
+        - Ensure the engine remains strictly framework-agnostic (no Axum/Actix/web dependencies).
+        - Enforce the typestate builder pattern; prevent illegal state transitions at compile-time.
+        - Ensure session creation, validation, and revocation logic is race-free and handles expiration securely.
+        - Ensure no unwraps or panics exist in non-test code.
+
+    - path: "crates/authkestra-op/**"
+      instructions: |
+        - Audit for strict OAuth 2.1 and OIDC Provider compliance.
+        - Ensure authorization codes are strictly single-use and invalidated atomically upon redemption.
+        - Ensure PKCE validation enforces SHA-256 (`code_challenge_method = S256`).
+        - Validate token expiration, audience, issuer, and scope claims.
+        - Ensure every new OP endpoint is paired with a corresponding route in both `authkestra-axum` and `authkestra-actix`.
+
+    - path: "crates/authkestra-resource/**"
+      instructions: |
+        - Validate DPoP (RFC 9449) proof verification: check HTTP method/URI binding, access token hash (`ath`), jti uniqueness, and replay prevention.
+        - Check JWT validation logic for algorithm confusion and clock-skew tolerance.
+
+    - path: "crates/authkestra-mcp/**"
+      instructions: |
+        - Audit Model Context Protocol authorization, capability boundaries, and step-up authentication.
+        - Ensure AI agent tokens cannot elevate privileges without explicit cryptographic verification.
+        - Prevent leakage of prompts or sensitive context in error messages and tracing.
+
+    - path: "crates/authkestra-providers/**"
+      instructions: |
+        - Verify that OAuth `state` and `code_verifier` are stored in encrypted, signed cookies rather than DB storage.
+        - Audit provider token exchanges and userinfo claims parsing for edge cases (e.g., unverified emails).
+        - Ensure feature gating matches `--no-default-features` cleanly for each provider.
+
+    - path: "crates/authkestra-devsig/**"
+      instructions: |
+        - Audit device-bound signature authentication and attestation key binding.
+        - Verify replay protection (timestamps, nonces) without per-request network lookups.
+
+    - path: "crates/authkestra-ssf/**"
+      instructions: |
+        - Audit RFC 8417 Security Event Token (SET) parsing and OpenID CAEP 1.0 event validation.
+        - Ensure RFC 8935 push delivery verification is tamper-proof.
+
+    - path: "crates/authkestra-policy/**"
+      instructions: |
+        - Check AWS Cedar policy evaluation for default-deny posture.
+        - Ensure entity hydration via `ResourceLoader` handles missing or invalid entities safely.
+
+    - path: "crates/authkestra-{axum,actix}/**"
+      instructions: |
+        - Ensure cookies are set with `HttpOnly`, `Secure`, and appropriate `SameSite` flags.
+        - Verify that any new OP route in `authkestra-op` is wired into both Axum and Actix.
+        - Ensure internal error details and traces are redacted before sending HTTP error responses.
+
+    - path: "crates/authkestra-store-sqlx/**"
+      instructions: |
+        - Ensure parameterized queries are strictly used; prevent any SQL injection risk.
+        - Verify transactional atomicity for operations like code exchange and session invalidation.
+
+    - path: "crates/authkestra/examples/**"
+      instructions: |
+        - Ensure examples use the `authkestra` facade crate and compile with `--all-features`.
+        - Ensure no credentials, real client secrets, or sensitive keys are committed.
+
+    - path: "**/*.rs"
+      instructions: |
+        - Enforce Definition of Done (DoD) for tracing: handlers and branching logic must have `tracing::{debug!, info!, warn!, error!}` instrumentation.
+        - Reject `.unwrap()` and `.expect()` in non-test code unless an invariant is formally documented.
+        - Ensure public API changes are reflected in doc comments.
