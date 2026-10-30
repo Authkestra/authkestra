@@ -59,20 +59,20 @@ rustls::crypto::ring::default_provider()
 
 Every Authkestra crate that speaks HTTPS exposes the same two features and
 forwards them to `authkestra-engine`. Cargo features are additive, so if any
-crate in your graph still enables `rustls-aws-lc-rs`, `aws-lc-rs` comes back —
+crate in your graph still enables `rustls-aws-lc-rs`, `aws-lc-rs` comes back - 
 check with `cargo tree -i aws-lc-rs -e features`.
 
 ## 🚀 Features
 
 - **Modular & Unified Core**: Following our RFC-001 architecture, core concerns are unified in `authkestra-engine` while adapters like `authkestra-axum` and `authkestra-actix` provide seamless framework integrations.
-- **Stateless OAuth**: OAuth `state` and `nonce` are stored securely in encrypted cookies—never in your database—keeping your architecture clean and horizontally scalable.
+- **Stateless OAuth**: OAuth `state` and `nonce` are stored securely in encrypted cookies - never in your database - keeping your architecture clean and horizontally scalable.
 - **Performant OIDC Discovery**: OIDC discovery documents are cached via background `tokio::spawn` tasks, completely eliminating per-request latency for fetching keys.
-- **Database Agnostic**: Authkestra never enforces schemas. All data access is strictly defined via traits (`KvStore`, `SessionStore`, `CredentialStore`, and `authkestra-op`'s `OpStore`), allowing you to use any database or ORM. There is deliberately no user/account table and no `UserStore` trait — your application owns that data (see `docs/book/ch02-core-engine-and-identity.md`).
+- **Database Agnostic**: Authkestra never enforces schemas. All data access is strictly defined via traits (`KvStore`, `SessionStore`, `CredentialStore`, and `authkestra-op`'s `OpStore`), allowing you to use any database or ORM. There is deliberately no user/account table and no `UserStore` trait -  your application owns that data (see `docs/book/ch02-core-engine-and-identity.md`).
 - **Flexible Chaining**: Chain multiple authentication strategies (Token, Session, Basic, Custom) seamlessly.
 - **OpenID Connect Provider (OP)**: Build your own identity provider and authorization server using `authkestra-op`.
 - **Session Management**: Built-in support for in-memory, Redis, and SQL via `sqlx`.
-- **Passwordless-native authentication**: passkeys (WebAuthn), TOTP, **magic links**, **email/SMS one-time codes** and **recovery codes** — the last three added in 0.13. Recovery codes are a factor-agnostic look-up secret authenticator (NIST SP 800-63B §5.1.2), not TOTP-specific backup codes, so they work for an account that never enrolled TOTP.
-- **Re-proof gating**: enrolling a second factor demands a *fresh* proof of identity, not merely a live session (`ReproofRequirement`). Method-agnostic by design — the framework owns no password to re-prompt for, and an account that has only a passkey should not be locked out of enrolment.
+- **Passwordless-native authentication**: passkeys (WebAuthn), TOTP, **magic links**, **email/SMS one-time codes** and **recovery codes** -  the last three added in 0.13. Recovery codes are a factor-agnostic look-up secret authenticator (NIST SP 800-63B §5.1.2), not TOTP-specific backup codes, so they work for an account that never enrolled TOTP.
+- **Re-proof gating**: enrolling a second factor demands a *fresh* proof of identity, not merely a live session (`ReproofRequirement`). Method-agnostic by design -  the framework owns no password to re-prompt for, and an account that has only a passkey should not be locked out of enrolment.
 - **SD-JWT (Selective Disclosure)**: Issue a single JWT carrying selectively disclosable claims (`draft-ietf-oauth-selective-disclosure-jwt`); the holder decides, per presentation, which claims to reveal to each verifier.
 - **AI Agent & MCP Tool Security**: Built-in guard for Model Context Protocol (MCP) servers via `authkestra-mcp`. Enforce 3-tier access control (`Public`, `Scoped`, `HumanApproved`), RFC 8785 JSON Canonicalization Scheme (JCS) cryptographic parameter binding, Passkey/WebAuthn human-in-the-loop (HITL) step-up approval, single-use `AtomicConsume` execution proofs, and zero-trust AES-256-GCM token brokering that shields downstream credentials from LLM context windows.
 
@@ -144,7 +144,7 @@ own module docs list the environment variables it needs.
 | Axum resource server with chained strategies | `cargo run -p authkestra --example axum_resource_server_strategy --all-features` |
 | Axum MCP security server | `cargo run -p authkestra --example axum_mcp_server --all-features` |
 
-Most of these have an Actix counterpart under the same name with the `actix_` prefix —
+Most of these have an Actix counterpart under the same name with the `actix_` prefix - 
 `actix_basic_setup`, `actix_oauth2_github`, `actix_oidc_google`, `actix_oauth_stateless`,
 `actix_op_server`, `actix_op_server_sqlx`, `actix_op_server_custom_grant`,
 `actix_op_server_attestation`, `actix_resource_server_strategy`, `actix_devsig`. Five scenarios
@@ -176,9 +176,9 @@ When autonomous AI agents and LLMs interact with backend systems via the [Model 
 Authkestra's `mcp` module (`authkestra-mcp`) brings zero-trust security to embedded MCP servers:
 
 1. **Three-Tier Security Model (`McpSecurityTier`)**:
-   - `Public`: Unauthenticated or optionally authenticated read-only tools (e.g. `echo`, `ping`).
-   - `Scoped { required_scopes }`: Protected by OAuth 2.1 / DPoP access tokens validated via `authkestra-resource`. Returns RFC 9728 `WWW-Authenticate` response headers with resource discovery endpoints.
-   - `HumanApproved { required_scopes, reproof, approval_ttl_secs }`: High-risk operations (e.g. wire transfers, database drops) requiring human-in-the-loop (HITL) cryptographic approval.
+ - `Public`: Unauthenticated or optionally authenticated read-only tools (e.g. `echo`, `ping`).
+ - `Scoped { required_scopes }`: Protected by OAuth 2.1 / DPoP access tokens validated via `authkestra-resource`. Returns RFC 9728 `WWW-Authenticate` response headers with resource discovery endpoints.
+ - `HumanApproved { required_scopes, reproof, approval_ttl_secs }`: High-risk operations (e.g. wire transfers, database drops) requiring human-in-the-loop (HITL) cryptographic approval.
 2. **Cryptographic Parameter Binding (RFC 8785 JCS + SHA-256)**:
    Tool arguments are deterministically canonicalized via JSON Canonicalization Scheme (JCS) and signed into a SHA-256 challenge digest over `(session_id, tool_name, jcs_arguments, expires_at)`. Modifying any argument between user approval and tool execution fails verification with a parameter mismatch error.
 3. **Hardware-Backed Step-Up Approval**:
@@ -191,11 +191,11 @@ Authkestra's `mcp` module (`authkestra-mcp`) brings zero-trust security to embed
 Authkestra provides first-class support for AI development assistants, coding agents, and context-aware LLMs:
 
 - **Machine-Readable Documentation (`llms.txt`)**:
-  - Compact index for coding agents: [`https://authkestra.com/llms.txt`](https://authkestra.com/llms.txt)
-  - Full API & typestate reference: [`https://docs.authkestra.com/llms-full.txt`](https://docs.authkestra.com/llms-full.txt)
+ - Compact index for coding agents: [`https://authkestra.com/llms.txt`](https://authkestra.com/llms.txt)
+ - Full API & typestate reference: [`https://docs.authkestra.com/llms-full.txt`](https://docs.authkestra.com/llms-full.txt)
 - **Official Agent Skills (`Authkestra/skills`)**:
-  - Repository of ready-to-use skills for Antigravity, Claude Code, and Roo Code: [`https://github.com/Authkestra/skills`](https://github.com/Authkestra/skills).
-  - Provides AI models with complete typestate builder rules, zero-hallucination recipes, and security best practices for Authkestra integrations.
+ - Repository of ready-to-use skills for Antigravity, Claude Code, and Roo Code: [`https://github.com/Authkestra/skills`](https://github.com/Authkestra/skills).
+ - Provides AI models with complete typestate builder rules, zero-hallucination recipes, and security best practices for Authkestra integrations.
 
 ## 🧩 Feature Flags Reference
 
