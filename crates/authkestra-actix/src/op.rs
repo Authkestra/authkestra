@@ -201,15 +201,32 @@ pub async fn actix_token_handler(
     )
     .await
     {
-        Ok(resp) => HttpResponse::Ok().json(resp),
+        Ok(resp) => with_dpop_nonce(HttpResponse::Ok(), &*store).json(resp),
         Err(err) => {
             let status = match err.error.as_str() {
                 "invalid_client" => actix_web::http::StatusCode::UNAUTHORIZED,
                 _ => actix_web::http::StatusCode::BAD_REQUEST,
             };
-            HttpResponse::build(status).json(err)
+            with_dpop_nonce(HttpResponse::build(status), &*store).json(err)
         }
     }
+}
+
+/// Adds a fresh `DPoP-Nonce` (RFC 9449 §8.1) when the store requires DPoP
+/// nonces — on every token response, so a client always holds a current one
+/// and a `use_dpop_nonce` refusal carries the value to retry with.
+fn with_dpop_nonce(
+    mut response: actix_web::HttpResponseBuilder,
+    store: &dyn authkestra_op::OpStore,
+) -> actix_web::HttpResponseBuilder {
+    if let Some(nonces) = store.dpop_nonces() {
+        tracing::debug!("attaching a fresh DPoP-Nonce to the token response (actix)");
+        response.insert_header((
+            authkestra_engine::token::dpop_nonce::DPOP_NONCE_HEADER,
+            nonces.issue(),
+        ));
+    }
+    response
 }
 
 pub async fn actix_userinfo_handler(

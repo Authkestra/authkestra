@@ -277,6 +277,21 @@ where
             (status, Json(err)).into_response()
         }
     };
+    with_dpop_nonce(response, &*store)
+}
+
+/// Adds a fresh `DPoP-Nonce` (RFC 9449 §8.1) when the store requires DPoP
+/// nonces — on every token response, so a client always holds a current one
+/// and a `use_dpop_nonce` refusal carries the value to retry with.
+fn with_dpop_nonce(mut response: Response, store: &dyn authkestra_op::OpStore) -> Response {
+    if let Some(nonces) = store.dpop_nonces() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&nonces.issue()) {
+            tracing::debug!("attaching a fresh DPoP-Nonce to the token response (axum)");
+            response
+                .headers_mut()
+                .insert(axum::http::HeaderName::from_static("dpop-nonce"), value);
+        }
+    }
     response
 }
 

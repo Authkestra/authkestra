@@ -4,7 +4,9 @@ use crate::device::DeviceCodeStore;
 use crate::dpop::{DpopReplayStore, NoDpopReplayStore};
 use crate::refresh::RefreshTokenStore;
 use authkestra_engine::store::traits::{ClientAssertionStore, NoClientAssertionStore};
+use authkestra_engine::token::dpop_nonce::DpopNonces;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 
 /// A unified store for all OpenID Provider state.
 /// This supertrait aggregates `ClientStore`, `AuthorizationCodeStore`,
@@ -58,6 +60,18 @@ pub trait OpStore:
         NoDpopReplayStore::default()
             .check_and_record_dpop_jti(jti, expires_at)
             .await
+    }
+
+    /// The DPoP nonce source the token endpoint requires proofs to carry a nonce from
+    /// (RFC 9449 §8), or `None` — the default — for no nonce requirement.
+    ///
+    /// Defaulted for the same reason as `check_and_record_dpop_jti`: adding it must not break
+    /// any existing `OpStore`. Unlike that method the default is *off*, not fail-closed: a
+    /// nonce is an extra freshness bound on top of proofs that are already verified and
+    /// single-use, so a store without one behaves exactly as before. Opt in with
+    /// `CompositeOpStore::with_dpop_nonces`.
+    fn dpop_nonces(&self) -> Option<&authkestra_engine::token::dpop_nonce::DpopNonces> {
+        None
     }
 
     /// Handle a custom grant type request during token exchange.
@@ -311,6 +325,7 @@ pub struct CompositeOpStore<C, A, R, D, J = NoClientAssertionStore, P = NoDpopRe
     devices: D,
     assertions: J,
     dpop_replays: P,
+    dpop_nonces: Option<Arc<DpopNonces>>,
 }
 
 #[async_trait::async_trait]
@@ -341,6 +356,10 @@ where
             .check_and_record_dpop_jti(jti, expires_at)
             .await
     }
+
+    fn dpop_nonces(&self) -> Option<&DpopNonces> {
+        self.dpop_nonces.as_deref()
+    }
 }
 
 impl<C, A, R, D> CompositeOpStore<C, A, R, D, NoClientAssertionStore, NoDpopReplayStore> {
@@ -353,6 +372,7 @@ impl<C, A, R, D> CompositeOpStore<C, A, R, D, NoClientAssertionStore, NoDpopRepl
             devices,
             assertions: NoClientAssertionStore::default(),
             dpop_replays: NoDpopReplayStore::default(),
+            dpop_nonces: None,
         }
     }
 }
@@ -379,6 +399,7 @@ impl<C, A, R, D, J, P> CompositeOpStore<C, A, R, D, J, P> {
             devices: self.devices,
             assertions,
             dpop_replays: self.dpop_replays,
+            dpop_nonces: self.dpop_nonces,
         }
     }
 
@@ -404,7 +425,24 @@ impl<C, A, R, D, J, P> CompositeOpStore<C, A, R, D, J, P> {
             devices: self.devices,
             assertions: self.assertions,
             dpop_replays,
+            dpop_nonces: self.dpop_nonces,
         }
+    }
+
+    /// Requires every DPoP proof presented at `/token` to carry a nonce from `nonces`
+    /// (RFC 9449 §8). Off until called.
+    ///
+    /// With it, a proof without a valid `nonce` claim is refused `400 {"error":
+    /// "use_dpop_nonce"}`, and the axum and actix token handlers put a fresh nonce in a
+    /// `DPoP-Nonce` header on every token response — the refusal and the successes alike — so a
+    /// client always holds a current one. A token request without a `DPoP` header is
+    /// unaffected: the nonce constrains proofs, not bearer clients.
+    ///
+    /// [`DpopNonces`] is stateless; give every node of a cluster the same secret
+    /// ([`DpopNonces::new`]), or use [`DpopNonces::random`] on a single node.
+    pub fn with_dpop_nonces(mut self, nonces: DpopNonces) -> Self {
+        self.dpop_nonces = Some(Arc::new(nonces));
+        self
     }
 }
 

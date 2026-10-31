@@ -103,6 +103,10 @@ name = "op_integration"
 required-features = ["macros", "session", "token", "op"]
 
 [[test]]
+name = "op_dpop_nonce"
+required-features = ["op"]
+
+[[test]]
 name = "devsig_test"
 required-features = ["devsig"]
 

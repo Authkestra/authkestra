@@ -630,6 +630,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "ed25519-dalek",
+ "hmac",
  "http 1.5.0",
  "jsonwebtoken",
  "p256",

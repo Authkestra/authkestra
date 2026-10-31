@@ -210,6 +210,11 @@ pub async fn handle_token(
 /// `req.dpop_jkt`, which every grant handler reads to stamp `cnf.jkt` onto
 /// the token it issues and report `token_type: "DPoP"` instead of
 /// `"Bearer"`. See `crate::dpop` for the replay-tracking half of this.
+///
+/// When `op_store.dpop_nonces()` is set (`CompositeOpStore::with_dpop_nonces`),
+/// a proof must also carry a current server nonce (RFC 9449 §8); one that
+/// does not is refused with `use_dpop_nonce`, and the caller (the axum and
+/// actix handlers) attaches a fresh `DPoP-Nonce` header to every response.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_token_with_client_cert(
     mut req: TokenRequest,
@@ -299,6 +304,29 @@ pub async fn handle_token_with_client_cert(
                 });
             }
         };
+
+        // RFC 9449 §8: when this server issues nonces, a proof must carry a
+        // current one. Checked after the proof verified (so the claim read
+        // here is covered by its signature) and before its `jti` is
+        // recorded, so the refusal does not burn the client's proof id —
+        // not that it matters for safety, the retry carries a new proof.
+        // The adapters attach a fresh `DPoP-Nonce` to this refusal.
+        if let Some(nonces) = op_store.dpop_nonces() {
+            let presented = authkestra_engine::token::dpop_nonce::dpop_proof_nonce(proof);
+            let accepted = presented.as_deref().is_some_and(|n| nonces.accepts(n));
+            if !accepted {
+                tracing::info!(
+                    client_id = %client_id,
+                    nonce_present = presented.is_some(),
+                    "DPoP proof lacks a current server nonce — answering use_dpop_nonce"
+                );
+                return Err(TokenErrorResponse {
+                    error: authkestra_engine::token::dpop_nonce::USE_DPOP_NONCE.to_string(),
+                    error_description: "Authorization server requires nonce in DPoP proof"
+                        .to_string(),
+                });
+            }
+        }
 
         // Anchored to the proof's own `iat`, not the current time: a proof
         // remains fresh (and so, re-presentable) up to `iat + max_age`
@@ -5389,17 +5417,26 @@ mod tests {
             }
 
             fn build(&self) -> String {
+                self.build_with_nonce(None)
+            }
+
+            /// As [`Self::build`], with a `nonce` claim (RFC 9449 §8) when
+            /// one is given.
+            fn build_with_nonce(&self, nonce: Option<&str>) -> String {
                 let header = serde_json::json!({
                     "typ": "dpop+jwt",
                     "alg": "EdDSA",
                     "jwk": self.jwk(),
                 });
-                let payload = serde_json::json!({
+                let mut payload = serde_json::json!({
                     "htm": "POST",
                     "htu": self.htu,
                     "iat": chrono::Utc::now().timestamp(),
                     "jti": self.jti,
                 });
+                if let Some(nonce) = nonce {
+                    payload["nonce"] = serde_json::json!(nonce);
+                }
                 let signing_input = format!("{}.{}", b64_json(&header), b64_json(&payload));
                 let signature = self.signing_key.sign(signing_input.as_bytes());
                 format!("{signing_input}.{}", b64(&signature.to_bytes()))
@@ -5462,6 +5499,135 @@ mod tests {
                 cnf.get("jkt").and_then(|v| v.as_str()),
                 Some(proof_builder.expected_jkt().as_str()),
             );
+        }
+
+        // --- DPoP nonces (RFC 9449 §8) ---
+
+        fn test_nonces() -> authkestra_engine::token::dpop_nonce::DpopNonces {
+            authkestra_engine::token::dpop_nonce::DpopNonces::new(
+                b"test nonce secret",
+                std::time::Duration::from_secs(300),
+            )
+        }
+
+        /// With nonces required, a proof without one is refused with
+        /// `use_dpop_nonce` — and its `jti` is not spent, so nothing about
+        /// the refusal depends on the client choosing a new one.
+        #[tokio::test]
+        async fn nonce_required_refuses_a_proof_without_one() {
+            let mut store = client_credentials_store_with_dpop_replay("client1")
+                .await
+                .with_dpop_nonces(test_nonces());
+            let proof = DpopProofBuilder::new("https://auth.example.com/token", "jti-n1").build();
+
+            let err = handle_token_with_client_cert(
+                client_credentials_request("client1"),
+                None,
+                &test_config(false),
+                &mut store,
+                &test_tokens(),
+                None,
+                Some(&proof),
+            )
+            .await
+            .expect_err("a proof without a nonce must be refused");
+            assert_eq!(err.error, "use_dpop_nonce");
+
+            assert!(
+                store
+                    .check_and_record_dpop_jti("jti-n1", Utc::now() + Duration::minutes(1))
+                    .await
+                    .unwrap(),
+                "the refused proof's jti must not have been recorded"
+            );
+        }
+
+        /// The retry the refusal asks for — a new proof carrying a nonce the
+        /// server issued — is accepted and DPoP-bound.
+        #[tokio::test]
+        async fn nonce_required_accepts_a_proof_with_a_current_nonce() {
+            let nonces = test_nonces();
+            let nonce = nonces.issue();
+            let mut store = client_credentials_store_with_dpop_replay("client1")
+                .await
+                .with_dpop_nonces(nonces);
+            let proof = DpopProofBuilder::new("https://auth.example.com/token", "jti-n2")
+                .build_with_nonce(Some(&nonce));
+
+            let resp = handle_token_with_client_cert(
+                client_credentials_request("client1"),
+                None,
+                &test_config(false),
+                &mut store,
+                &test_tokens(),
+                None,
+                Some(&proof),
+            )
+            .await
+            .expect("a proof with a current nonce must be accepted");
+            assert_eq!(resp.token_type, "DPoP");
+        }
+
+        /// A nonce from two windows ago, or from another secret, is refused
+        /// like a missing one.
+        #[tokio::test]
+        async fn nonce_required_refuses_a_stale_or_foreign_nonce() {
+            let nonces = test_nonces();
+            let stale = nonces.issue_at(Utc::now().timestamp() - 900);
+            let foreign = authkestra_engine::token::dpop_nonce::DpopNonces::new(
+                b"another server",
+                std::time::Duration::from_secs(300),
+            )
+            .issue();
+            let mut store = client_credentials_store_with_dpop_replay("client1")
+                .await
+                .with_dpop_nonces(nonces);
+
+            for (jti, nonce) in [("jti-n3", stale), ("jti-n4", foreign)] {
+                let proof = DpopProofBuilder::new("https://auth.example.com/token", jti)
+                    .build_with_nonce(Some(&nonce));
+                let err = handle_token_with_client_cert(
+                    client_credentials_request("client1"),
+                    None,
+                    &test_config(false),
+                    &mut store,
+                    &test_tokens(),
+                    None,
+                    Some(&proof),
+                )
+                .await
+                .expect_err("a stale or foreign nonce must be refused");
+                assert_eq!(err.error, "use_dpop_nonce", "{jti}");
+            }
+        }
+
+        /// Nonces constrain proofs, not bearer clients: a request with no
+        /// `DPoP` header is unaffected.
+        #[tokio::test]
+        async fn nonce_required_leaves_bearer_requests_alone() {
+            let mut store = client_credentials_store_with_dpop_replay("client1")
+                .await
+                .with_dpop_nonces(test_nonces());
+            let resp = handle_token_with_client_cert(
+                client_credentials_request("client1"),
+                None,
+                &test_config(false),
+                &mut store,
+                &test_tokens(),
+                None,
+                None,
+            )
+            .await
+            .expect("a bearer request needs no nonce");
+            assert_eq!(resp.token_type, "Bearer");
+        }
+
+        /// Without `with_dpop_nonces` (the default) a nonce-less proof is
+        /// accepted exactly as before.
+        #[tokio::test]
+        async fn nonces_are_off_by_default() {
+            let store = client_credentials_store_with_dpop_replay("client1").await;
+            assert!(store.dpop_nonces().is_none());
         }
 
         /// Companion regression: no `DPoP` header at all keeps issuing a

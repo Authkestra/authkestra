@@ -35,6 +35,9 @@ thiserror = "2.0.18"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = { workspace = true }
+# HMAC-SHA256 for stateless DPoP nonces (`token::dpop_nonce`). Already in the
+# lockfile through other RustCrypto users; the 0.12 line pairs with sha2 0.10.
+hmac = "0.12"
 base64 = "0.22.1"
 rand = { workspace = true }
 
