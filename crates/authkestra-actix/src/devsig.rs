@@ -13,7 +13,8 @@
 //! [`DeviceSignatureAuth`] buffers the body (under an explicit, enforced size cap), calls
 //! `authkestra_devsig::verify` with the full request, and stashes the resulting
 //! `authkestra_devsig::DeviceIdentity` in the request's extensions on success -- or
-//! short-circuits with a `401`/`413` response on failure. [`AuthDeviceSignature`] is a
+//! short-circuits with a `401`/`413` response on failure, in device-signature profile v1's shape
+//! (see [`refusal_response`]). [`AuthDeviceSignature`] is a
 //! `FromRequest` extractor that reads the identity the middleware already verified back out of
 //! extensions; it does not perform any verification itself.
 
@@ -22,11 +23,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use actix_web::dev::{forward_ready, Payload, Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::header::HeaderName;
+use actix_web::http::header::{self, HeaderName};
+use actix_web::http::StatusCode;
 use actix_web::web::{Bytes, BytesMut};
-use actix_web::{Error, FromRequest, HttpMessage, HttpRequest};
+use actix_web::{Error, FromRequest, HttpMessage, HttpRequest, HttpResponse};
 use authkestra_devsig::{
-    verify, DeviceIdentity, IssuerJwks, ReplayStore, SignedRequest, VerifierConfig, VerifyError,
+    verify, DeviceIdentity, IssuerJwks, Refusal, ReplayStore, SignedRequest, VerifierConfig,
+    VerifyError, REFUSAL_CONTENT_TYPE,
 };
 use futures_util::future::LocalBoxFuture;
 use futures_util::StreamExt;
@@ -231,11 +234,36 @@ fn header_str(req: &HttpRequest, name: &HeaderName) -> Option<String> {
 }
 
 fn reject(err: VerifyError) -> Error {
-    let code = err.code().to_string();
-    match err {
-        VerifyError::BodyTooLarge(_) => actix_web::error::ErrorPayloadTooLarge(code),
-        _ => actix_web::error::ErrorUnauthorized(code),
+    let response = refusal_response(err.refusal());
+    actix_web::error::InternalError::from_response(err, response).into()
+}
+
+/// Renders a device-signature refusal in profile v1's shape
+/// (`docs/rfc-014-devsig-profile-v1.md`): the refusal's status, a JSON body
+/// `{"error": "<code>"}` (`Content-Type: application/json`), and — for a `401` — a
+/// `WWW-Authenticate: DeviceSignature error="<code>"` challenge.
+///
+/// [`DeviceSignatureAuth`] answers every rejection with it. It is public so a handler can answer
+/// the two refusals the verifier never produces in the same shape a client already sorts by:
+/// [`Refusal::device_revoked`] (the application knows the device is revoked) and
+/// [`Refusal::insufficient_user_authentication`] (the handler needs the user-present key, see
+/// `authkestra_devsig::DeviceIdentity::key_role`).
+///
+/// ```
+/// use authkestra_actix::devsig::refusal_response;
+/// use authkestra_devsig::Refusal;
+///
+/// let response = refusal_response(Refusal::device_revoked());
+/// assert_eq!(response.status(), 403);
+/// ```
+pub fn refusal_response(refusal: Refusal) -> HttpResponse {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::UNAUTHORIZED);
+    let mut response = HttpResponse::build(status);
+    response.content_type(REFUSAL_CONTENT_TYPE);
+    if let Some(challenge) = refusal.www_authenticate() {
+        response.insert_header((header::WWW_AUTHENTICATE, challenge));
     }
+    response.body(refusal.body())
 }
 
 /// The extractor for a request verified by [`DeviceSignatureAuth`].

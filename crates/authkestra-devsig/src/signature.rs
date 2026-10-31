@@ -216,19 +216,15 @@ pub fn verify_bound_and_signed(
     if claims.aud != config.audience {
         return Err(VerifyError::AudienceMismatch);
     }
-    if let Some(query) = request.query {
-        let computed = hex_sha256(query.as_bytes());
-        match &claims.qsh {
-            Some(qsh) if constant_time_eq(qsh, &computed) => {}
-            _ => return Err(VerifyError::QueryMismatch),
-        }
+    // Profile v1: each hash is present **exactly** when the request has a query (body), so a
+    // hash on one side only is a mismatch. A stray `bdh` on a body-less request is not harmless:
+    // it means the body the device signed is not the one that arrived — it was stripped in
+    // transit — and accepting it would let a signed write be replayed as an empty one.
+    if !hash_matches(request.query.map(str::as_bytes), claims.qsh.as_deref()) {
+        return Err(VerifyError::QueryMismatch);
     }
-    if let Some(body) = request.body {
-        let computed = hex_sha256(body);
-        match &claims.bdh {
-            Some(bdh) if constant_time_eq(bdh, &computed) => {}
-            _ => return Err(VerifyError::BodyMismatch),
-        }
+    if !hash_matches(request.body, claims.bdh.as_deref()) {
+        return Err(VerifyError::BodyMismatch);
     }
 
     Ok(VerifiedSignature {
@@ -247,6 +243,16 @@ fn curve_is_consistent(algorithm: &AlgorithmParameters) -> bool {
         AlgorithmParameters::EllipticCurve(p) => !matches!(p.curve, EllipticCurve::Ed25519),
         AlgorithmParameters::OctetKeyPair(p) => matches!(p.curve, EllipticCurve::Ed25519),
         AlgorithmParameters::RSA(_) | AlgorithmParameters::OctetKey(_) => true,
+        _ => false,
+    }
+}
+
+/// Whether a `qsh`/`bdh` claim agrees with the request: both absent, or both present with the
+/// claim equal (constant-time) to the lower-case hex SHA-256 of the raw bytes.
+fn hash_matches(request: Option<&[u8]>, claim: Option<&str>) -> bool {
+    match (request, claim) {
+        (None, None) => true,
+        (Some(bytes), Some(claim)) => constant_time_eq(claim, &hex_sha256(bytes)),
         _ => false,
     }
 }

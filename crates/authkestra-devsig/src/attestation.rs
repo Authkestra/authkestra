@@ -81,6 +81,16 @@ pub async fn verify_trust(
     let raw_claims: RawAttestationClaims = serde_json::from_value(parsed.claims_json.clone())
         .map_err(|e| VerifyError::Malformed(format!("invalid attestation claims: {e}")))?;
 
+    // Profile v1: `att` is an object of attributes. A bare string (a key role) or a top-level
+    // `status` beside a missing `att` are the two shapes this profile exists to retire, and both
+    // are refused as malformed rather than read as an inactive device, so a client built against
+    // either sees the shape error instead of a renewal loop.
+    if !raw_claims.att.is_object() {
+        return Err(VerifyError::Malformed(
+            "attestation att claim must be a JSON object".to_string(),
+        ));
+    }
+
     if !config.trusted_issuers.contains(&raw_claims.iss) {
         tracing::debug!(target: "authkestra_devsig", iss = %raw_claims.iss, "attestation rejected: untrusted issuer");
         return Err(VerifyError::UntrustedIssuer(raw_claims.iss));

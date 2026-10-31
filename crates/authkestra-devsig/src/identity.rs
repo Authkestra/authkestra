@@ -61,4 +61,58 @@ impl DeviceIdentity {
             attributes,
         }
     }
+
+    /// Which of the device's keys signed this request: the attestation's `att.role` under
+    /// device-signature profile v1 (`docs/rfc-014-devsig-profile-v1.md`).
+    ///
+    /// Only the exact string `"user_present"` reads as [`KeyRole::UserPresent`]. Anything else —
+    /// an absent `role`, another string, a non-string — reads as [`KeyRole::Ambient`], the key
+    /// that never prompts. That fallback is the safe direction: a value this crate does not
+    /// understand can never be mistaken for a fresh user-presence proof, and an application
+    /// that already used `att.role` for its own roles (`"user"`, `"admin"`) keeps working, with
+    /// every such device read as ambient.
+    ///
+    /// ```
+    /// use authkestra_devsig::{DeviceIdentity, KeyRole};
+    ///
+    /// let identity = DeviceIdentity::new(
+    ///     "usr_1".to_owned(),
+    ///     "dev_1".to_owned(),
+    ///     "jkt-1".to_owned(),
+    ///     serde_json::json!({ "status": "active", "role": "user_present" }),
+    /// );
+    /// assert_eq!(identity.key_role(), KeyRole::UserPresent);
+    /// ```
+    pub fn key_role(&self) -> KeyRole {
+        match self.attributes.get("role").and_then(Value::as_str) {
+            Some(role) if role == KeyRole::UserPresent.as_str() => KeyRole::UserPresent,
+            _ => KeyRole::Ambient,
+        }
+    }
+}
+
+/// Which of a device's keys signed a request (device-signature profile v1, `att.role`).
+///
+/// A device may enrol two keys: one that signs every ordinary request without asking, and one
+/// whose every use is gated by the platform (a biometric or the device credential). A handler
+/// that needs proof the user was present for *this* request checks for
+/// [`KeyRole::UserPresent`] and otherwise answers
+/// [`Refusal::insufficient_user_authentication`](crate::Refusal::insufficient_user_authentication).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum KeyRole {
+    /// The key that never prompts (`att.role` absent or `"ambient"`).
+    Ambient,
+    /// The key whose every signature needed the user (`att.role` = `"user_present"`).
+    UserPresent,
+}
+
+impl KeyRole {
+    /// The wire value in `att.role`: `"ambient"` or `"user_present"`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            KeyRole::Ambient => "ambient",
+            KeyRole::UserPresent => "user_present",
+        }
+    }
 }
