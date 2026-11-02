@@ -7,12 +7,42 @@ use crate::error::OpError;
 use crate::refresh::RefreshToken;
 use crate::store::OpStore;
 use authkestra_engine::token::cert_binding::x5t_s256_thumbprint;
-use authkestra_engine::token::TokenManager;
+use authkestra_engine::token::{Audience, TokenManager};
 use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
+
+fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audience {
+    match allowed_audiences {
+        [] => Audience::Single(client_id.to_string()),
+        [audience] => Audience::Single(audience.clone()),
+        audiences => Audience::Multiple(audiences.to_vec()),
+    }
+}
+
+#[cfg(test)]
+mod user_token_audience_tests {
+    use super::user_token_audience;
+    use authkestra_engine::token::Audience;
+
+    #[test]
+    fn uses_configured_audiences_and_preserves_the_empty_default() {
+        assert_eq!(
+            user_token_audience("app", &[]),
+            Audience::Single("app".to_string())
+        );
+        assert_eq!(
+            user_token_audience("app", &["api".to_string()]),
+            Audience::Single("api".to_string())
+        );
+        assert_eq!(
+            user_token_audience("app", &["api".to_string(), "ledger".to_string()]),
+            Audience::Multiple(vec!["api".to_string(), "ledger".to_string()])
+        );
+    }
+}
 
 /// Request payload for the token endpoint.
 #[derive(Debug, Deserialize, Clone)]
@@ -722,11 +752,12 @@ async fn handle_device_code(
                 let mut extra = HashMap::new();
                 merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
-                let access_token = match tokens.issue_user_token_with_extra(
+                let access_token = match tokens.issue_access_token(
                     identity.clone(),
+                    &client_id,
+                    user_token_audience(&client_id, &client.allowed_audiences),
                     expires_in,
                     scope_opt.clone(),
-                    Some(client_id.clone()),
                     extra,
                 ) {
                     Ok(t) => t,
@@ -973,11 +1004,12 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
     let mut extra = HashMap::new();
     merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
-    let access_token = match tokens.issue_user_token_with_extra(
+    let access_token = match tokens.issue_access_token(
         auth_code.identity.clone(),
+        &client_id,
+        user_token_audience(&client_id, &client.allowed_audiences),
         expires_in,
         scope_opt.clone(),
-        Some(client_id.clone()),
         extra,
     ) {
         Ok(t) => t,
@@ -1580,11 +1612,12 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
     let mut extra = HashMap::new();
     merge_dpop_cnf(&mut extra, jkt.as_deref());
 
-    let access_token = match tokens.issue_user_token_with_extra(
+    let access_token = match tokens.issue_access_token(
         old_rt.identity.clone(),
+        &client_id,
+        user_token_audience(&client_id, &client.allowed_audiences),
         expires_in,
         scope_opt.clone(),
-        Some(client_id.clone()),
         extra,
     ) {
         Ok(t) => t,

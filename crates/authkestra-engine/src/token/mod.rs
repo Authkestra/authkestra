@@ -419,6 +419,44 @@ impl TokenManager {
         self.issue_user_token_with_extra(identity, expires_in_secs, scope, aud, HashMap::new())
     }
 
+    /// Issues an RFC 9068 access token for a client and its configured audiences.
+    pub fn issue_access_token(
+        &self,
+        identity: Identity,
+        client_id: &str,
+        audience: Audience,
+        expires_in_secs: u64,
+        scope: Option<String>,
+        mut extra: HashMap<String, serde_json::Value>,
+    ) -> Result<String, AuthError> {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let expiration = now + expires_in_secs as usize;
+        let jti = take_jti(&mut extra);
+        extra.insert("client_id".to_string(), client_id.into());
+        reject_named_claim_collisions(&extra)?;
+
+        let claims = Claims {
+            iss: self.issuer.clone(),
+            sub: identity.external_id.clone(),
+            aud: Some(audience),
+            exp: expiration,
+            iat: now,
+            nbf: Some(now),
+            jti: Some(jti),
+            scope,
+            identity: Some(identity),
+            extra,
+        };
+
+        let mut header = Header::new(self.alg);
+        header.typ = Some("at+jwt".to_string());
+        if let Some(ref kid) = self.kid {
+            header.kid = Some(kid.clone());
+        }
+
+        encode(&header, &claims, &self.encoding_key).map_err(|e| AuthError::Token(e.to_string()))
+    }
+
     /// Issues a token for a user identity, stamping the given `extra` claims
     /// onto the token in addition to the standard/core claims.
     ///
@@ -796,6 +834,33 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
         assert_eq!(claims.sub, "user123");
         assert!(claims.jti.is_some());
         assert!(claims.nbf.is_some());
+    }
+
+    #[test]
+    fn access_tokens_include_client_audience_claim_and_type() {
+        let manager = TokenManager::new(b"secret", Some("issuer".to_string()));
+        let token = manager
+            .issue_access_token(
+                test_identity(),
+                "app-client",
+                Audience::Multiple(vec!["api-a".into(), "api-b".into()]),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+
+        let header = jsonwebtoken::decode_header(&token).unwrap();
+        let claims = manager.validate_token(&token, Some("api-b")).unwrap();
+        assert_eq!(header.typ.as_deref(), Some("at+jwt"));
+        assert_eq!(
+            claims.aud,
+            Some(Audience::Multiple(vec!["api-a".into(), "api-b".into()]))
+        );
+        assert_eq!(
+            claims.extra.get("client_id"),
+            Some(&serde_json::json!("app-client"))
+        );
     }
 
     #[test]
