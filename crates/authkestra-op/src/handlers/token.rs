@@ -6926,6 +6926,10 @@ mod client_auth_tests;
 #[cfg(test)]
 mod log_level_policy_tests;
 
+#[cfg(test)]
+#[allow(deprecated)] // `require_pkce` (authkestra#273) — these fixtures don't exercise it
+mod audience_tests;
+
 impl TokenResponse {
     /// Creates a new TokenResponse.
     pub fn new(access_token: String, token_type: String, expires_in: u64) -> Self {
