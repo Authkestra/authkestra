@@ -429,6 +429,18 @@ impl TokenManager {
         scope: Option<String>,
         mut extra: HashMap<String, serde_json::Value>,
     ) -> Result<String, AuthError> {
+        let issuer = self.issuer.clone().ok_or_else(|| {
+            AuthError::Token("RFC 9068 access tokens require a configured issuer".to_string())
+        })?;
+        let audience_count = match &audience {
+            Audience::Single(_) => 1,
+            Audience::Multiple(audiences) => audiences.len(),
+        };
+        tracing::debug!(
+            audience_count,
+            has_key_id = self.kid.is_some(),
+            "Issuing RFC 9068 access token"
+        );
         let now = chrono::Utc::now().timestamp() as usize;
         let expiration = now + expires_in_secs as usize;
         let jti = take_jti(&mut extra);
@@ -436,7 +448,7 @@ impl TokenManager {
         reject_named_claim_collisions(&extra)?;
 
         let claims = Claims {
-            iss: self.issuer.clone(),
+            iss: Some(issuer),
             sub: identity.external_id.clone(),
             aud: Some(audience),
             exp: expiration,
@@ -839,9 +851,10 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
     #[test]
     fn access_tokens_include_client_audience_claim_and_type() {
         let manager = TokenManager::new(b"secret", Some("issuer".to_string()));
+        let identity = test_identity();
         let token = manager
             .issue_access_token(
-                test_identity(),
+                identity.clone(),
                 "app-client",
                 Audience::Multiple(vec!["api-a".into(), "api-b".into()]),
                 3600,
@@ -853,6 +866,15 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
         let header = jsonwebtoken::decode_header(&token).unwrap();
         let claims = manager.validate_token(&token, Some("api-b")).unwrap();
         assert_eq!(header.typ.as_deref(), Some("at+jwt"));
+        assert_eq!(claims.sub, identity.external_id);
+        let embedded_identity = claims
+            .identity
+            .expect("issued access token includes identity");
+        assert_eq!(embedded_identity.provider_id, identity.provider_id);
+        assert_eq!(embedded_identity.external_id, identity.external_id);
+        assert_eq!(embedded_identity.username, identity.username);
+        assert_eq!(embedded_identity.email, identity.email);
+        assert_eq!(embedded_identity.attributes, identity.attributes);
         assert_eq!(
             claims.aud,
             Some(Audience::Multiple(vec!["api-a".into(), "api-b".into()]))
@@ -861,6 +883,23 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
             claims.extra.get("client_id"),
             Some(&serde_json::json!("app-client"))
         );
+    }
+
+    #[test]
+    fn access_tokens_require_a_configured_issuer() {
+        let manager = TokenManager::new(b"secret", None);
+        let error = manager
+            .issue_access_token(
+                test_identity(),
+                "app-client",
+                Audience::Single("api".into()),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .expect_err("RFC 9068 access tokens require an issuer");
+
+        assert!(matches!(error, AuthError::Token(_)));
     }
 
     #[test]

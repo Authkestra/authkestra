@@ -7,7 +7,7 @@ use crate::error::OpError;
 use crate::refresh::RefreshToken;
 use crate::store::OpStore;
 use authkestra_engine::token::cert_binding::x5t_s256_thumbprint;
-use authkestra_engine::token::{Audience, TokenManager};
+use authkestra_engine::token::{Audience, Claims, TokenManager};
 use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -16,15 +16,50 @@ use std::collections::HashMap;
 
 fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audience {
     match allowed_audiences {
-        [] => Audience::Single(client_id.to_string()),
-        [audience] => Audience::Single(audience.clone()),
-        audiences => Audience::Multiple(audiences.to_vec()),
+        [] => {
+            tracing::debug!(
+                "No resource audiences configured; defaulting access token audience to client_id"
+            );
+            Audience::Single(client_id.to_string())
+        }
+        [audience] => {
+            tracing::debug!("Selected the configured access token audience");
+            Audience::Single(audience.clone())
+        }
+        audiences => {
+            tracing::debug!(
+                audience_count = audiences.len(),
+                "Selected configured access token audiences"
+            );
+            Audience::Multiple(audiences.to_vec())
+        }
     }
+}
+
+fn subject_token_is_intended_for_client(
+    token: &str,
+    claims: &Claims,
+    subject_token_type: &str,
+    client_id: &str,
+) -> bool {
+    claims
+        .aud
+        .as_ref()
+        .is_some_and(|aud| aud.contains(client_id))
+        || (subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+            && jsonwebtoken::decode_header(token)
+                .ok()
+                .is_some_and(|header| header.typ.as_deref() == Some("at+jwt"))
+            && claims
+                .extra
+                .get("client_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(client_id))
 }
 
 #[cfg(test)]
 mod user_token_audience_tests {
-    use super::user_token_audience;
+    use super::{subject_token_is_intended_for_client, user_token_audience, TokenManager};
     use authkestra_engine::token::Audience;
 
     #[test]
@@ -41,6 +76,54 @@ mod user_token_audience_tests {
             user_token_audience("app", &["api".to_string(), "ledger".to_string()]),
             Audience::Multiple(vec!["api".to_string(), "ledger".to_string()])
         );
+    }
+
+    #[test]
+    fn token_exchange_binding_accepts_only_the_matching_access_token_client() {
+        use authkestra_engine::auth::state::Identity;
+        use authkestra_engine::token::Audience;
+        use std::collections::HashMap;
+
+        let tokens = TokenManager::new(b"token-exchange-test-secret", Some("issuer".into()));
+        let access_token = tokens
+            .issue_access_token(
+                Identity {
+                    provider_id: "test".into(),
+                    external_id: "user-1".into(),
+                    email: None,
+                    username: None,
+                    attributes: HashMap::new(),
+                },
+                "client-a",
+                Audience::Single("resource-api".into()),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .expect("issue access token");
+        let claims = tokens
+            .validate_token(&access_token, None)
+            .expect("validate access token");
+        let access_token_type = "urn:ietf:params:oauth:token-type:access_token";
+
+        assert!(subject_token_is_intended_for_client(
+            &access_token,
+            &claims,
+            access_token_type,
+            "client-a"
+        ));
+        assert!(!subject_token_is_intended_for_client(
+            &access_token,
+            &claims,
+            access_token_type,
+            "client-b"
+        ));
+        assert!(!subject_token_is_intended_for_client(
+            &access_token,
+            &claims,
+            "urn:ietf:params:oauth:token-type:id_token",
+            "client-a"
+        ));
     }
 }
 
@@ -1701,8 +1784,6 @@ pub async fn default_handle_token_exchange(
     tokens: &TokenManager,
 ) -> Result<TokenResponse, TokenErrorResponse> {
     use crate::client::GrantType;
-    use authkestra_engine::token::Claims;
-
     // Captured up front: several `req` fields below are moved out
     // (`req.audience`, `req.scope`) before the access token is issued, and
     // `dpop_jkt` is needed at that point.
@@ -1783,15 +1864,14 @@ pub async fn default_handle_token_exchange(
         }
     };
 
-    // Audience Binding: this client must be a member of the subject token's
-    // `aud` claim, which per RFC 7519 §4.1.3 may be a single string or an
-    // array of strings (e.g. a Keycloak realm with multiple
-    // `oidc-audience-mapper` entries). `azp` is not read here — this crate's
-    // `Claims` has no such field, and there is no dedicated `azp` check.
-    let is_intended_aud = claims
-        .aud
-        .as_ref()
-        .is_some_and(|aud| aud.contains(&client_id));
+    // Bind the exchange to the requesting client through `aud`, or through
+    // the signed `client_id` on this issuer's RFC 9068 access tokens.
+    let is_intended_aud = subject_token_is_intended_for_client(
+        subject_token_str,
+        &claims,
+        subject_token_type,
+        &client_id,
+    );
     if !is_intended_aud {
         tracing::error!(
             client_id = %client_id,
@@ -1977,7 +2057,10 @@ mod tests {
     }
 
     pub(crate) fn test_tokens() -> TokenManager {
-        TokenManager::new(b"super_secret_key_that_is_long_enough_for_hmac", None)
+        TokenManager::new(
+            b"super_secret_key_that_is_long_enough_for_hmac",
+            Some("https://auth.example.com".to_string()),
+        )
     }
 
     fn test_identity() -> Identity {
