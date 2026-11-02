@@ -408,6 +408,11 @@ impl TokenManager {
         self
     }
 
+    /// Whether this manager has an issuer configured for access-token issuance.
+    pub fn has_issuer(&self) -> bool {
+        self.issuer.is_some()
+    }
+
     /// Issues a token for a user identity.
     pub fn issue_user_token(
         &self,

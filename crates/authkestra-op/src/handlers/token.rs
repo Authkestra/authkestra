@@ -36,30 +36,53 @@ fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audienc
     }
 }
 
-fn subject_token_is_intended_for_client(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubjectTokenClientBinding {
+    Audience,
+    SignedClientId,
+}
+
+fn subject_token_client_binding(
     token: &str,
     claims: &Claims,
     subject_token_type: &str,
     client_id: &str,
-) -> bool {
-    claims
+) -> Option<SubjectTokenClientBinding> {
+    if claims
         .aud
         .as_ref()
         .is_some_and(|aud| aud.contains(client_id))
-        || (subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
-            && jsonwebtoken::decode_header(token)
-                .ok()
-                .is_some_and(|header| header.typ.as_deref() == Some("at+jwt"))
-            && claims
-                .extra
-                .get("client_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(client_id))
+    {
+        return Some(SubjectTokenClientBinding::Audience);
+    }
+
+    (subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+        && jsonwebtoken::decode_header(token)
+            .ok()
+            .is_some_and(|header| header.typ.as_deref() == Some("at+jwt"))
+        && claims
+            .extra
+            .get("client_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(client_id))
+    .then_some(SubjectTokenClientBinding::SignedClientId)
+}
+
+fn subject_token_dpop_binding_matches(claims: &Claims, dpop_jkt: Option<&str>) -> bool {
+    claims
+        .extra
+        .get("cnf")
+        .and_then(|cnf| cnf.get("jkt"))
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|expected_jkt| dpop_jkt == Some(expected_jkt))
 }
 
 #[cfg(test)]
 mod user_token_audience_tests {
-    use super::{subject_token_is_intended_for_client, user_token_audience, TokenManager};
+    use super::{
+        subject_token_client_binding, subject_token_dpop_binding_matches, user_token_audience,
+        SubjectTokenClientBinding, TokenManager,
+    };
     use authkestra_engine::token::Audience;
 
     #[test]
@@ -106,24 +129,76 @@ mod user_token_audience_tests {
             .expect("validate access token");
         let access_token_type = "urn:ietf:params:oauth:token-type:access_token";
 
-        assert!(subject_token_is_intended_for_client(
-            &access_token,
-            &claims,
-            access_token_type,
-            "client-a"
+        assert_eq!(
+            subject_token_client_binding(&access_token, &claims, access_token_type, "client-a"),
+            Some(SubjectTokenClientBinding::SignedClientId)
+        );
+        assert_eq!(
+            subject_token_client_binding(&access_token, &claims, access_token_type, "client-b"),
+            None
+        );
+        assert_eq!(
+            subject_token_client_binding(
+                &access_token,
+                &claims,
+                "urn:ietf:params:oauth:token-type:id_token",
+                "client-a"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn token_exchange_requires_the_subject_tokens_dpop_key() {
+        use authkestra_engine::auth::state::Identity;
+        use std::collections::HashMap;
+
+        let tokens = TokenManager::new(b"dpop-binding-test-secret", Some("issuer".into()));
+        let bound = tokens
+            .issue_access_token(
+                Identity {
+                    provider_id: "test".into(),
+                    external_id: "user-1".into(),
+                    email: None,
+                    username: None,
+                    attributes: HashMap::new(),
+                },
+                "client-a",
+                Audience::Single("resource-api".into()),
+                3600,
+                None,
+                HashMap::from([("cnf".to_string(), serde_json::json!({"jkt": "key-a"}))]),
+            )
+            .unwrap();
+        let bound_claims = tokens.validate_token(&bound, None).unwrap();
+        assert!(!subject_token_dpop_binding_matches(&bound_claims, None));
+        assert!(!subject_token_dpop_binding_matches(
+            &bound_claims,
+            Some("key-b")
         ));
-        assert!(!subject_token_is_intended_for_client(
-            &access_token,
-            &claims,
-            access_token_type,
-            "client-b"
+        assert!(subject_token_dpop_binding_matches(
+            &bound_claims,
+            Some("key-a")
         ));
-        assert!(!subject_token_is_intended_for_client(
-            &access_token,
-            &claims,
-            "urn:ietf:params:oauth:token-type:id_token",
-            "client-a"
-        ));
+
+        let unbound = tokens
+            .issue_access_token(
+                Identity {
+                    provider_id: "test".into(),
+                    external_id: "user-1".into(),
+                    email: None,
+                    username: None,
+                    attributes: HashMap::new(),
+                },
+                "client-a",
+                Audience::Single("resource-api".into()),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let unbound_claims = tokens.validate_token(&unbound, None).unwrap();
+        assert!(subject_token_dpop_binding_matches(&unbound_claims, None));
     }
 }
 
@@ -1513,6 +1588,14 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
         });
     }
 
+    if !tokens.has_issuer() {
+        tracing::error!(client_id = %client_id, "Cannot refresh access token without issuer configuration");
+        return Err(TokenErrorResponse {
+            error: "server_error".to_string(),
+            error_description: "Access token issuer is not configured".to_string(),
+        });
+    }
+
     let refresh_token_str = match req.refresh_token.as_deref() {
         Some(t) => t,
         None => {
@@ -1864,15 +1947,21 @@ pub async fn default_handle_token_exchange(
         }
     };
 
+    if !subject_token_dpop_binding_matches(&claims, dpop_jkt.as_deref()) {
+        tracing::warn!(client_id = %client_id, "Subject token is DPoP-bound but the exchange proof key does not match");
+        return Err(TokenErrorResponse {
+            error: "invalid_dpop_proof".to_string(),
+            error_description: "The subject token is bound to a different DPoP key".to_string(),
+        });
+    }
+
     // Bind the exchange to the requesting client through `aud`, or through
     // the signed `client_id` on this issuer's RFC 9068 access tokens.
-    let is_intended_aud = subject_token_is_intended_for_client(
-        subject_token_str,
-        &claims,
-        subject_token_type,
-        &client_id,
-    );
-    if !is_intended_aud {
+    let client_binding =
+        subject_token_client_binding(subject_token_str, &claims, subject_token_type, &client_id);
+    if let Some(binding) = client_binding {
+        tracing::debug!(?binding, "Subject token authorized for client exchange");
+    } else {
         tracing::error!(
             client_id = %client_id,
             "Client is not authorized to exchange this token"
@@ -3710,6 +3799,53 @@ mod tests {
             client_assertion_type: None,
             dpop_jkt: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_without_issuer_preserves_the_refresh_token() {
+        let clients = authkestra_engine::store::memory::MemoryStore::<ClientRegistration>::new();
+        clients
+            .set(
+                "client1",
+                refresh_test_client(),
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let mut refresh = authkestra_engine::store::memory::MemoryStore::<RefreshToken>::new();
+        refresh
+            .store_token(RefreshToken::new(
+                "rt-no-issuer".to_string(),
+                "client1".to_string(),
+                test_identity(),
+                "profile".to_string(),
+                Utc::now() + Duration::days(1),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let mut store = crate::store::CompositeOpStore::new(
+            clients,
+            authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+            refresh,
+            authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+            ),
+        );
+        let error = default_handle_refresh_token(
+            refresh_test_req("rt-no-issuer"),
+            "client1".to_string(),
+            refresh_test_client(),
+            &test_config(false),
+            &mut store,
+            &TokenManager::new(b"test-secret", None),
+        )
+        .await
+        .expect_err("issuance requires an issuer");
+
+        assert_eq!(error.error, "server_error");
+        assert!(store.get_token("rt-no-issuer").await.unwrap().is_some());
     }
 
     #[tokio::test]
