@@ -81,7 +81,7 @@ async fn main() {
         .session_store(Arc::new(MemoryStore::<
             authkestra_engine::auth::session::Session,
         >::new()))
-        .token_manager(Arc::new(authkestra_engine::TokenManager::new(
+        .token_manager(Arc::new(authkestra::core::TokenManager::new(
             b"example-only-32-byte-secret-key",
             Some(issuer.clone()),
         )))

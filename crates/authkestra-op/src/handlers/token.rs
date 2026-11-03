@@ -41,7 +41,16 @@ fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audienc
 /// otherwise the OP's own, so a manager built without one (`.jwt_secret(...)`) still issues
 /// RFC 9068 access tokens.
 fn access_token_issuer<'a>(tokens: &'a TokenManager, config: &'a OpConfig) -> &'a str {
-    tokens.issuer().unwrap_or(&config.issuer)
+    match tokens.issuer() {
+        Some(issuer) => {
+            tracing::debug!("Access token issuer taken from the token manager");
+            issuer
+        }
+        None => {
+            tracing::debug!("Token manager has no issuer; access token issuer taken from OpConfig");
+            &config.issuer
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
