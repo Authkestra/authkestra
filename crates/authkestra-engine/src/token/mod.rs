@@ -408,9 +408,10 @@ impl TokenManager {
         self
     }
 
-    /// Whether this manager has an issuer configured for access-token issuance.
-    pub fn has_issuer(&self) -> bool {
-        self.issuer.is_some()
+    /// The issuer this manager stamps on the tokens it issues and requires on the tokens it
+    /// validates, when one is configured.
+    pub fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
     }
 
     /// Issues a token for a user identity.
@@ -424,9 +425,15 @@ impl TokenManager {
         self.issue_user_token_with_extra(identity, expires_in_secs, scope, aud, HashMap::new())
     }
 
-    /// Issues an RFC 9068 access token for a client and its configured audiences.
+    /// Issues an RFC 9068 access token from `issuer` for a client and its configured audiences.
+    ///
+    /// The issuer is passed in rather than read from the manager because RFC 9068 requires `iss`
+    /// on every access token, while a manager may have been built without one: the caller (an
+    /// OpenID Provider) always knows its own.
+    #[allow(clippy::too_many_arguments)]
     pub fn issue_access_token(
         &self,
+        issuer: &str,
         identity: Identity,
         client_id: &str,
         audience: Audience,
@@ -434,9 +441,6 @@ impl TokenManager {
         scope: Option<String>,
         mut extra: HashMap<String, serde_json::Value>,
     ) -> Result<String, AuthError> {
-        let issuer = self.issuer.clone().ok_or_else(|| {
-            AuthError::Token("RFC 9068 access tokens require a configured issuer".to_string())
-        })?;
         let audience_count = match &audience {
             Audience::Single(_) => 1,
             Audience::Multiple(audiences) => audiences.len(),
@@ -453,7 +457,7 @@ impl TokenManager {
         reject_named_claim_collisions(&extra)?;
 
         let claims = Claims {
-            iss: Some(issuer),
+            iss: Some(issuer.to_string()),
             sub: identity.external_id.clone(),
             aud: Some(audience),
             exp: expiration,
@@ -859,6 +863,7 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
         let identity = test_identity();
         let token = manager
             .issue_access_token(
+                "issuer",
                 identity.clone(),
                 "app-client",
                 Audience::Multiple(vec!["api-a".into(), "api-b".into()]),
@@ -891,10 +896,11 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
     }
 
     #[test]
-    fn access_tokens_require_a_configured_issuer() {
+    fn access_tokens_carry_the_given_issuer_without_one_on_the_manager() {
         let manager = TokenManager::new(b"secret", None);
-        let error = manager
+        let token = manager
             .issue_access_token(
+                "https://op.example",
                 test_identity(),
                 "app-client",
                 Audience::Single("api".into()),
@@ -902,9 +908,10 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
                 None,
                 HashMap::new(),
             )
-            .expect_err("RFC 9068 access tokens require an issuer");
+            .expect("an access token without a manager issuer");
 
-        assert!(matches!(error, AuthError::Token(_)));
+        let claims = manager.validate_token(&token, Some("api")).unwrap();
+        assert_eq!(claims.iss.as_deref(), Some("https://op.example"));
     }
 
     #[test]

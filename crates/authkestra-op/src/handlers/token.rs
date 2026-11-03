@@ -36,6 +36,14 @@ fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audienc
     }
 }
 
+/// The `iss` of the access tokens this OP issues: the token manager's issuer when it has one,
+/// since it checks that issuer on every token it validates later (refresh, token exchange), and
+/// otherwise the OP's own, so a manager built without one (`.jwt_secret(...)`) still issues
+/// RFC 9068 access tokens.
+fn access_token_issuer<'a>(tokens: &'a TokenManager, config: &'a OpConfig) -> &'a str {
+    tokens.issuer().unwrap_or(&config.issuer)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SubjectTokenClientBinding {
     Audience,
@@ -110,6 +118,7 @@ mod user_token_audience_tests {
         let tokens = TokenManager::new(b"token-exchange-test-secret", Some("issuer".into()));
         let access_token = tokens
             .issue_access_token(
+                "issuer",
                 Identity {
                     provider_id: "test".into(),
                     external_id: "user-1".into(),
@@ -156,6 +165,7 @@ mod user_token_audience_tests {
         let tokens = TokenManager::new(b"dpop-binding-test-secret", Some("issuer".into()));
         let bound = tokens
             .issue_access_token(
+                "issuer",
                 Identity {
                     provider_id: "test".into(),
                     external_id: "user-1".into(),
@@ -183,6 +193,7 @@ mod user_token_audience_tests {
 
         let unbound = tokens
             .issue_access_token(
+                "issuer",
                 Identity {
                     provider_id: "test".into(),
                     external_id: "user-1".into(),
@@ -911,6 +922,7 @@ async fn handle_device_code(
                 merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
                 let access_token = match tokens.issue_access_token(
+                    access_token_issuer(tokens, config),
                     identity.clone(),
                     &client_id,
                     user_token_audience(&client_id, &client.allowed_audiences),
@@ -1163,6 +1175,7 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
     merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
     let access_token = match tokens.issue_access_token(
+        access_token_issuer(tokens, config),
         auth_code.identity.clone(),
         &client_id,
         user_token_audience(&client_id, &client.allowed_audiences),
@@ -1588,14 +1601,6 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
         });
     }
 
-    if !tokens.has_issuer() {
-        tracing::error!(client_id = %client_id, "Cannot refresh access token without issuer configuration");
-        return Err(TokenErrorResponse {
-            error: "server_error".to_string(),
-            error_description: "Access token issuer is not configured".to_string(),
-        });
-    }
-
     let refresh_token_str = match req.refresh_token.as_deref() {
         Some(t) => t,
         None => {
@@ -1779,6 +1784,7 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
     merge_dpop_cnf(&mut extra, jkt.as_deref());
 
     let access_token = match tokens.issue_access_token(
+        access_token_issuer(tokens, config),
         old_rt.identity.clone(),
         &client_id,
         user_token_audience(&client_id, &client.allowed_audiences),
@@ -3802,7 +3808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_refresh_without_issuer_preserves_the_refresh_token() {
+    async fn test_refresh_without_a_manager_issuer_issues_from_the_op() {
         let clients = authkestra_engine::store::memory::MemoryStore::<ClientRegistration>::new();
         clients
             .set(
@@ -3833,19 +3839,21 @@ mod tests {
             authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
             ),
         );
-        let error = default_handle_refresh_token(
+        // What `.jwt_secret(...)` builds: a token manager without an issuer.
+        let tokens = TokenManager::new(b"test-secret", None);
+        let response = default_handle_refresh_token(
             refresh_test_req("rt-no-issuer"),
             "client1".to_string(),
             refresh_test_client(),
             &test_config(false),
             &mut store,
-            &TokenManager::new(b"test-secret", None),
+            &tokens,
         )
         .await
-        .expect_err("issuance requires an issuer");
+        .expect("the OP's issuer stands in for the manager's");
 
-        assert_eq!(error.error, "server_error");
-        assert!(store.get_token("rt-no-issuer").await.unwrap().is_some());
+        let claims = tokens.validate_token(&response.access_token, None).unwrap();
+        assert_eq!(claims.iss, Some(test_config(false).issuer));
     }
 
     #[tokio::test]
@@ -5951,6 +5959,101 @@ mod tests {
         }
 
         // --- Refresh token DPoP key continuity (RFC 9449 §5) ---
+
+        /// RFC 9449 §6.1, through the token endpoint: a DPoP-bound subject
+        /// token is exchanged only with a verified proof for its own key, so a
+        /// stolen bound token cannot be traded for a fresh one.
+        #[tokio::test]
+        async fn token_exchange_of_a_bound_subject_token_requires_its_dpop_key() {
+            let tokens = test_tokens();
+            let holder = DpopProofBuilder::with_key_seed(
+                31,
+                "https://auth.example.com/token",
+                "jti-exchange-holder",
+            );
+            let subject_token = tokens
+                .issue_access_token(
+                    "https://auth.example.com",
+                    test_identity(),
+                    "client1",
+                    Audience::Single("client1".to_string()),
+                    3600,
+                    Some("profile".to_string()),
+                    HashMap::from([(
+                        "cnf".to_string(),
+                        serde_json::json!({"jkt": holder.expected_jkt()}),
+                    )]),
+                )
+                .unwrap();
+
+            let clients = authkestra_engine::store::memory::MemoryStore::<
+                crate::client::ClientRegistration,
+            >::new();
+            clients
+                .set(
+                    "client1",
+                    ClientRegistration {
+                        client_id: "client1".to_string(),
+                        client_secret_hash: None,
+                        redirect_uris: vec![],
+                        grant_types: vec![GrantType::TokenExchange],
+                        scopes: vec!["profile".to_string()],
+                        require_pkce: false,
+                        allowed_audiences: vec![],
+                        token_endpoint_auth_method: None,
+                        jwks: None,
+                    },
+                    std::time::Duration::from_secs(31536000),
+                )
+                .await
+                .unwrap();
+            let mut store = crate::store::CompositeOpStore::new(
+                clients,
+                authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+                authkestra_engine::store::memory::MemoryStore::<RefreshToken>::new(),
+                authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+                ),
+            )
+            .with_dpop_replay_store(authkestra_engine::store::memory::MemoryStore::<
+                DpopJtiRecord,
+            >::new());
+
+            let other_key = DpopProofBuilder::with_key_seed(
+                32,
+                "https://auth.example.com/token",
+                "jti-exchange-other",
+            );
+            for (what, proof) in [
+                ("no proof", None),
+                ("another key's proof", Some(other_key.build())),
+            ] {
+                let err = handle_token_with_client_cert(
+                    default_tx_req(&subject_token),
+                    None,
+                    &test_config(true),
+                    &mut store,
+                    &tokens,
+                    None,
+                    proof.as_deref(),
+                )
+                .await
+                .expect_err(what);
+                assert_eq!(err.error, "invalid_dpop_proof", "{what}");
+            }
+
+            let exchanged = handle_token_with_client_cert(
+                default_tx_req(&subject_token),
+                None,
+                &test_config(true),
+                &mut store,
+                &tokens,
+                None,
+                Some(&holder.build()),
+            )
+            .await
+            .expect("the key holder's proof must be accepted");
+            assert_eq!(exchanged.token_type, "DPoP");
+        }
 
         /// Registers a client authorized for `authorization_code` +
         /// `refresh_token` with `offline_access` allowed, and stores one
