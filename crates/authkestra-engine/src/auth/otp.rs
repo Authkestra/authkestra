@@ -72,16 +72,33 @@ pub struct OtpCode {
 
 /// What the store holds against a subject.
 ///
+fn default_challenge_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// What the store holds against a subject.
+///
 /// Immutable for its whole life: the attempt budget lives in a counter beside
 /// it rather than in here, because a field inside a serialised record cannot
 /// be decremented atomically. See [`AtomicDecrement`].
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OtpChallenge {
+    /// Unique generation ID for this challenge (UUID v4).
+    #[serde(default = "default_challenge_id")]
+    pub challenge_id: String,
     /// SHA-256 of the code, never the code.
     pub code_hash: String,
     /// The channel it went out on, so `amr` can name it later.
     pub channel: OtpChannel,
+    /// Unix seconds at which the challenge expires.
+    #[serde(default)]
+    pub expires_at: i64,
+}
+
+/// Derives the store key for an attempt counter bound to a specific challenge generation.
+fn counter_key(key: &str, challenge_id: &str) -> String {
+    format!("{key}:gen:{challenge_id}")
 }
 
 /// Derives the key that holds a subject's resend cooldown.
@@ -143,8 +160,10 @@ pub struct OtpAuthMethod<S> {
 /// routed a lookup at this key.
 fn cooldown_marker() -> OtpChallenge {
     OtpChallenge {
+        challenge_id: String::new(),
         code_hash: String::new(),
         channel: OtpChannel::Email,
+        expires_at: 0,
     }
 }
 
@@ -221,6 +240,15 @@ where
             return Err(AuthError::InvalidInput);
         }
 
+        if ttl.as_secs() == 0 {
+            tracing::warn!(
+                subject = %subject,
+                ttl = ?ttl,
+                "otp mint refused: TTL must be at least one second"
+            );
+            return Err(AuthError::InvalidInput);
+        }
+
         // Before anything is generated or written: a refused mint should cost
         // nothing and leave no trace.
         if let Some(cooldown) = self.resend_cooldown {
@@ -238,10 +266,14 @@ where
 
         let code = generate_code();
         let key = challenge_key(subject);
+        let challenge_id = uuid::Uuid::new_v4().to_string();
+        let expires_at = chrono::Utc::now().timestamp() + ttl.as_secs() as i64;
 
         let challenge = OtpChallenge {
+            challenge_id,
             code_hash: hash_code(&code),
             channel,
+            expires_at,
         };
 
         // Anything that fails from here on has to hand the cooldown back. It
@@ -258,7 +290,6 @@ where
             return Err(e);
         }
 
-        let expires_at = chrono::Utc::now().timestamp() + ttl.as_secs() as i64;
         tracing::debug!(
             subject = %subject,
             ?channel,
@@ -281,6 +312,7 @@ where
         ttl: Duration,
         max_attempts: u32,
     ) -> Result<(), AuthError> {
+        let counter_k = counter_key(key, &challenge.challenge_id);
         self.store
             .set(key, challenge, ttl)
             .await
@@ -290,7 +322,7 @@ where
         // with no budget — which fails closed, since a missing counter reads
         // as no attempts left.
         self.store
-            .init_counter(key, max_attempts, ttl)
+            .init_counter(&counter_k, max_attempts, ttl)
             .await
             .map_err(|e| AuthError::Internal(format!("otp counter init failed: {e}")))?;
 
@@ -325,9 +357,15 @@ where
     ///
     /// The counter is left to expire. It cannot be inherited by a later
     /// challenge for the same subject, because `mint` replaces it.
-    async fn discard(&self, key: &str) {
+    async fn discard(&self, key: &str, challenge_id: &str) {
         if let Err(e) = self.store.delete(key).await {
             tracing::warn!(error = %e, "failed to discard a spent otp challenge");
+        }
+        if !challenge_id.is_empty() {
+            let counter_k = counter_key(key, challenge_id);
+            if let Err(e) = self.store.delete(&counter_k).await {
+                tracing::debug!(error = %e, "failed to clean up otp counter key");
+            }
         }
     }
 }
@@ -386,9 +424,10 @@ where
             return Err(AuthError::InvalidCredentials);
         };
 
+        let counter_k = counter_key(&key, &challenge.challenge_id);
         let remaining = self
             .store
-            .decrement(&key)
+            .decrement(&counter_k)
             .await
             .map_err(|e| AuthError::Internal(format!("otp counter read failed: {e}")))?;
 
@@ -397,7 +436,7 @@ where
         // invert the guard entirely.
         let Some(remaining) = remaining else {
             tracing::warn!("otp rejected: no attempt budget for a live challenge");
-            self.discard(&key).await;
+            self.discard(&key, &challenge.challenge_id).await;
             return Err(AuthError::InvalidCredentials);
         };
 
@@ -413,7 +452,7 @@ where
                 // Deleted rather than left to expire, so an exhausted
                 // challenge is indistinguishable from one that never existed.
                 tracing::warn!("otp attempt budget exhausted; discarding the challenge");
-                self.discard(&key).await;
+                self.discard(&key, &challenge.challenge_id).await;
             }
             return Err(AuthError::InvalidCredentials);
         }
@@ -434,8 +473,26 @@ where
             .await
             .map_err(|e| AuthError::Internal(format!("otp claim failed: {e}")))?;
 
-        if claimed.is_none() {
+        let Some(consumed) = claimed else {
             tracing::warn!("otp rejected: the challenge was claimed concurrently");
+            return Err(AuthError::InvalidCredentials);
+        };
+
+        if consumed.challenge_id != challenge.challenge_id {
+            tracing::warn!(
+                expected_id = %challenge.challenge_id,
+                actual_id = %consumed.challenge_id,
+                "otp rejected: challenge was replaced by concurrent mint; restoring new challenge"
+            );
+            let remaining_secs =
+                (consumed.expires_at - chrono::Utc::now().timestamp()).max(1) as u64;
+            if let Err(e) = self
+                .store
+                .set(&key, consumed, Duration::from_secs(remaining_secs))
+                .await
+            {
+                tracing::error!(error = %e, "failed to restore replaced challenge into store");
+            }
             return Err(AuthError::InvalidCredentials);
         }
 
@@ -919,5 +976,39 @@ mod tests {
             first_digits.len() >= 8,
             "only saw leading digits {first_digits:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn zero_and_sub_second_ttl_are_rejected() {
+        let m = method();
+        assert!(matches!(
+            m.mint("alice", Duration::ZERO, OtpChannel::Email, 3).await,
+            Err(AuthError::InvalidInput)
+        ));
+        assert!(matches!(
+            m.mint("alice", Duration::from_millis(999), OtpChannel::Email, 3)
+                .await,
+            Err(AuthError::InvalidInput)
+        ));
+        assert!(m
+            .mint("alice", Duration::from_secs(1), OtpChannel::Email, 3)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn new_mint_supersedes_old_and_old_submission_does_not_consume_new() {
+        let m = method();
+        let first = m.mint("alice", TTL, OtpChannel::Email, 3).await.unwrap();
+        let second = m.mint("alice", TTL, OtpChannel::Email, 3).await.unwrap();
+
+        // Submitting old code must fail
+        assert!(matches!(
+            m.authenticate(submit("alice", &first.code)).await,
+            Err(AuthError::InvalidCredentials)
+        ));
+
+        // And the second code must STILL work!
+        assert!(m.authenticate(submit("alice", &second.code)).await.is_ok());
     }
 }

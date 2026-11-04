@@ -63,6 +63,11 @@ pub use session::{Session, SessionConfig, SessionStore};
 /// them has nothing to store.
 #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
 pub mod store;
+#[cfg(all(
+    feature = "memory",
+    any(feature = "webauthn", feature = "totp", feature = "recovery-codes")
+))]
+pub use crate::store::memory::MemoryCredentialStore;
 #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
 pub use store::CredentialStore;
 

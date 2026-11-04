@@ -320,6 +320,166 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
     }
 }
 
+/// An in-memory implementation of [`crate::auth::CredentialStore`].
+#[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+#[derive(Clone, Default, Debug)]
+pub struct MemoryCredentialStore {
+    creds: Arc<Mutex<HashMap<String, Vec<serde_json::Value>>>>,
+}
+
+#[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+impl MemoryCredentialStore {
+    /// Create a new empty `MemoryCredentialStore`.
+    pub fn new() -> Self {
+        Self {
+            creds: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+#[async_trait]
+impl crate::auth::CredentialStore for MemoryCredentialStore {
+    async fn save_credential(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+        data: serde_json::Value,
+    ) -> Result<(), crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let mut creds = self.creds.lock().unwrap();
+        let list = creds.entry(key).or_default();
+        let cred_id = data
+            .get("credential_id")
+            .or_else(|| data.get("id"))
+            .and_then(|v| v.as_str());
+        if let Some(id) = cred_id {
+            if let Some(pos) = list.iter().position(|c| {
+                c.get("credential_id")
+                    .or_else(|| c.get("id"))
+                    .and_then(|v| v.as_str())
+                    == Some(id)
+            }) {
+                list[pos] = data;
+                return Ok(());
+            }
+        }
+        list.push(data);
+        Ok(())
+    }
+
+    async fn get_credentials(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+    ) -> Result<Vec<serde_json::Value>, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let creds = self.creds.lock().unwrap();
+        Ok(creds.get(&key).cloned().unwrap_or_default())
+    }
+
+    async fn update_credential(
+        &self,
+        credential_id: &str,
+        data: serde_json::Value,
+    ) -> Result<(), crate::auth::error::AuthError> {
+        let mut creds = self.creds.lock().unwrap();
+        for list in creds.values_mut() {
+            for val in list.iter_mut() {
+                if let Some(obj) = val.as_object_mut() {
+                    if obj
+                        .get("credential_id")
+                        .or_else(|| obj.get("id"))
+                        .and_then(|v| v.as_str())
+                        == Some(credential_id)
+                    {
+                        if let Some(update_obj) = data.as_object() {
+                            for (k, v) in update_obj {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_credential(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+        credential_id: &str,
+    ) -> Result<bool, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let mut creds = self.creds.lock().unwrap();
+        if let Some(list) = creds.get_mut(&key) {
+            let orig = list.len();
+            list.retain(|c| {
+                c.get("credential_id")
+                    .or_else(|| c.get("id"))
+                    .and_then(|v| v.as_str())
+                    != Some(credential_id)
+            });
+            Ok(list.len() < orig)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn delete_credentials(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+    ) -> Result<u64, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let mut creds = self.creds.lock().unwrap();
+        if let Some(list) = creds.remove(&key) {
+            Ok(list.len() as u64)
+        } else {
+            Ok(0)
+        }
+    }
+
+    async fn claim_totp_step(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        matched_step: u64,
+    ) -> Result<bool, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:totp");
+        let mut creds = self.creds.lock().unwrap();
+        let Some(list) = creds.get_mut(&key) else {
+            return Ok(false);
+        };
+        for val in list.iter_mut() {
+            if let Some(obj) = val.as_object_mut() {
+                if obj
+                    .get("credential_id")
+                    .or_else(|| obj.get("id"))
+                    .and_then(|v| v.as_str())
+                    == Some(credential_id)
+                {
+                    let current = obj
+                        .get("last_used_step")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if matched_step > current {
+                        obj.insert(
+                            "last_used_step".to_string(),
+                            serde_json::json!(matched_step),
+                        );
+                        return Ok(true);
+                    } else {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -645,5 +805,31 @@ mod tests {
 
         // Next get by index should return None (and internally clean up the orphaned index)
         assert_eq!(store.get_by_index("sk1").await.unwrap(), None);
+    }
+
+    #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+    #[tokio::test]
+    async fn test_memory_credential_store_totp_step_claim() {
+        use crate::auth::CredentialStore;
+        let store = MemoryCredentialStore::new();
+
+        store
+            .save_credential(
+                "alice",
+                "totp",
+                serde_json::json!({
+                    "credential_id": "cred1",
+                    "secret": "ABC",
+                    "last_used_step": 0
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(store.claim_totp_step("alice", "cred1", 50).await.unwrap());
+        assert!(!store.claim_totp_step("alice", "cred1", 50).await.unwrap());
+        assert!(!store.claim_totp_step("alice", "cred1", 49).await.unwrap());
+        assert!(store.claim_totp_step("alice", "cred1", 51).await.unwrap());
+        assert!(!store.claim_totp_step("bob", "cred1", 52).await.unwrap());
     }
 }

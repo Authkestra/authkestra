@@ -96,11 +96,14 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
             }
         }
         if unidentified > 0 {
-            tracing::warn!(
+            tracing::error!(
                 user_id = %user_id,
                 count = unidentified,
-                "Existing TOTP credentials carry no credential_id and cannot be replaced; they may keep authenticating"
+                "Cannot rotate TOTP: existing credentials carry no credential_id and cannot be safely retired"
             );
+            return Err(AuthError::Internal(
+                "Cannot rotate TOTP: existing credentials carry no credential_id and cannot be safely retired".into(),
+            ));
         }
 
         let val = serde_json::json!({
@@ -143,16 +146,20 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
                     // delete that removed nothing would just add a third copy.
                     Ok(true) => self.store.save_credential(user_id, "totp", val).await?,
                     Ok(false) => {
-                        tracing::warn!(
+                        tracing::error!(
                             user_id = %user_id,
-                            "Store reported nothing to delete under the TOTP credential id; superseded secrets remain and may keep authenticating"
+                            "Store reported nothing to delete under the TOTP credential id; duplicate credentials remain"
                         );
+                        return Err(AuthError::Internal(
+                            "Failed to retire duplicate TOTP credentials".into(),
+                        ));
                     }
                     Err(AuthError::Unsupported) => {
-                        tracing::warn!(
+                        tracing::error!(
                             user_id = %user_id,
-                            "Store neither replaces nor deletes credentials; the superseded TOTP secret remains and may keep authenticating"
+                            "Store neither replaces nor deletes credentials; aborting TOTP rotation"
                         );
+                        return Err(AuthError::Unsupported);
                     }
                     Err(e) => return Err(e),
                 }
@@ -167,22 +174,36 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
                 .delete_credential(user_id, "totp", stale_id)
                 .await
             {
-                Ok(_) => {
+                Ok(true) => {
                     tracing::debug!(user_id = %user_id, credential_id = %stale_id, "Deleted superseded TOTP credential");
                 }
-                // The store cannot delete. Credentials written by earlier versions used random
-                // uuid credential_ids, so they will not be replaced by the deterministic id
-                // either: such a store keeps accumulating secrets, exactly as it did before
-                // this id scheme existed. Nothing more can be done from here, so stop trying.
+                Ok(false) => {
+                    tracing::error!(
+                        user_id = %user_id,
+                        credential_id = %stale_id,
+                        "Failed to delete superseded TOTP credential: not found"
+                    );
+                    return Err(AuthError::Internal(format!(
+                        "Failed to retire superseded TOTP credential {stale_id}"
+                    )));
+                }
                 Err(AuthError::Unsupported) => {
-                    tracing::warn!(
+                    tracing::error!(
                         user_id = %user_id,
                         count = stale_ids.len(),
-                        "Store does not support delete_credential; superseded TOTP secrets remain and may keep authenticating"
+                        "Store does not support delete_credential; cannot safely retire superseded TOTP secrets"
                     );
-                    break;
+                    return Err(AuthError::Unsupported);
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        user_id = %user_id,
+                        credential_id = %stale_id,
+                        "Failed to delete superseded TOTP credential"
+                    );
+                    return Err(e);
+                }
             }
         }
 
@@ -225,6 +246,7 @@ impl<S: CredentialStore + 'static> AuthMethod for TotpAuthMethod<S> {
                 .to_string();
             let cred_id = obj
                 .get("credential_id")
+                .or_else(|| obj.get("id"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let step = obj
@@ -236,6 +258,19 @@ impl<S: CredentialStore + 'static> AuthMethod for TotpAuthMethod<S> {
             return Err(AuthError::Internal(
                 "Invalid stored TOTP secret format".to_string(),
             ));
+        };
+
+        let cred_id = match credential_id {
+            Some(id) if !id.trim().is_empty() => id,
+            _ => {
+                tracing::error!(
+                    user_id = %user_id,
+                    "TOTP credential has no valid credential_id; rejecting identifierless credential"
+                );
+                return Err(AuthError::Credentials(
+                    "TOTP credential missing required identifier".into(),
+                ));
+            }
         };
 
         if secret_b32.is_empty() {
@@ -276,20 +311,34 @@ impl<S: CredentialStore + 'static> AuthMethod for TotpAuthMethod<S> {
         }
 
         if let Some(step) = matched_step {
-            if let Some(cred_id) = credential_id {
-                let update_data = serde_json::json!({
-                    "last_used_step": step
-                });
-                if let Err(e) = self.store.update_credential(&cred_id, update_data).await {
+            match self.store.claim_totp_step(&user_id, &cred_id, step).await {
+                Ok(true) => {
+                    tracing::debug!(
+                        user_id = %user_id,
+                        credential_id = %cred_id,
+                        step = step,
+                        "Successfully claimed TOTP step"
+                    );
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        credential_id = %cred_id,
+                        step = step,
+                        "TOTP step was already consumed or is outdated"
+                    );
+                    return Err(AuthError::Credentials(
+                        "Invalid or replayed TOTP code".into(),
+                    ));
+                }
+                Err(e) => {
                     tracing::error!(
                         error = %e,
                         user_id = %user_id,
                         credential_id = %cred_id,
-                        "Failed to update TOTP last_used_step in the credential store"
+                        "Failed to claim TOTP step in credential store"
                     );
-                    return Err(AuthError::Internal(
-                        "Failed to persist security state".into(),
-                    ));
+                    return Err(e);
                 }
             }
 
@@ -436,6 +485,39 @@ mod tests {
             } else {
                 Ok(0)
             }
+        }
+
+        async fn claim_totp_step(
+            &self,
+            user_id: &str,
+            credential_id: &str,
+            matched_step: u64,
+        ) -> Result<bool, AuthError> {
+            let key = format!("{user_id}:totp");
+            let mut creds = self.creds.lock().unwrap();
+            let Some(val_list) = creds.get_mut(&key) else {
+                return Ok(false);
+            };
+            for val in val_list.iter_mut() {
+                if let Some(obj) = val.as_object_mut() {
+                    if obj.get("credential_id").and_then(|v| v.as_str()) == Some(credential_id) {
+                        let current = obj
+                            .get("last_used_step")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        if matched_step > current {
+                            obj.insert(
+                                "last_used_step".to_string(),
+                                serde_json::json!(matched_step),
+                            );
+                            return Ok(true);
+                        } else {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+            Ok(false)
         }
     }
 
@@ -931,5 +1013,140 @@ mod tests {
 
         let result = store.delete_credentials("user1", "totp").await;
         assert!(matches!(result, Err(AuthError::Unsupported)));
+    }
+
+    #[tokio::test]
+    async fn test_totp_rejects_identifierless_credentials() {
+        let store = MockStore {
+            creds: Mutex::new(HashMap::new()),
+        };
+        // Insert a TOTP credential with no credential_id
+        store.creds.lock().unwrap().insert(
+            "user_no_id:totp".to_string(),
+            vec![serde_json::json!({
+                "secret": "JBSWY3DPEHPK3PXP",
+                "algorithm": "SHA1",
+                "digits": 6,
+                "step": 30,
+            })],
+        );
+
+        let totp_method = TotpAuthMethod::new(store);
+        let err = totp_method
+            .authenticate(AuthInput::Totp {
+                user_id: "user_no_id".to_string(),
+                code: "123456".to_string(),
+            })
+            .await
+            .unwrap_err();
+        match err {
+            AuthError::Credentials(msg) => {
+                assert!(msg.contains("missing required identifier"));
+            }
+            other => panic!("expected AuthError::Credentials, got {:?}", other),
+        }
+    }
+
+    struct FailingRetirementStore {
+        creds: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    }
+
+    #[async_trait]
+    impl CredentialStore for FailingRetirementStore {
+        async fn save_credential(
+            &self,
+            user_id: &str,
+            cred_type: &str,
+            data: serde_json::Value,
+        ) -> Result<(), AuthError> {
+            let key = format!("{user_id}:{cred_type}");
+            self.creds
+                .lock()
+                .unwrap()
+                .entry(key)
+                .or_default()
+                .push(data);
+            Ok(())
+        }
+        async fn get_credentials(
+            &self,
+            user_id: &str,
+            cred_type: &str,
+        ) -> Result<Vec<serde_json::Value>, AuthError> {
+            let key = format!("{user_id}:{cred_type}");
+            Ok(self
+                .creds
+                .lock()
+                .unwrap()
+                .get(&key)
+                .cloned()
+                .unwrap_or_default())
+        }
+        async fn update_credential(
+            &self,
+            _credential_id: &str,
+            _data: serde_json::Value,
+        ) -> Result<(), AuthError> {
+            Ok(())
+        }
+        async fn delete_credential(
+            &self,
+            _user_id: &str,
+            _cred_type: &str,
+            _credential_id: &str,
+        ) -> Result<bool, AuthError> {
+            Err(AuthError::Internal("simulated store delete failure".into()))
+        }
+        async fn delete_credentials(
+            &self,
+            _user_id: &str,
+            _cred_type: &str,
+        ) -> Result<u64, AuthError> {
+            Err(AuthError::Internal("simulated store delete failure".into()))
+        }
+        async fn claim_totp_step(
+            &self,
+            _user_id: &str,
+            _credential_id: &str,
+            _matched_step: u64,
+        ) -> Result<bool, AuthError> {
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_totp_fails_if_retirement_fails() {
+        let store = FailingRetirementStore {
+            creds: Mutex::new(HashMap::new()),
+        };
+        // Seed an existing credential
+        store.creds.lock().unwrap().insert(
+            "user1:totp".to_string(),
+            vec![serde_json::json!({
+                "credential_id": "old_cred",
+                "secret": "JBSWY3DPEHPK3PXP",
+                "algorithm": "SHA1",
+                "digits": 6,
+                "step": 30,
+            })],
+        );
+
+        let totp_method = TotpAuthMethod::new(store);
+        let err = totp_method
+            .register_totp(
+                &fresh_identity("user1"),
+                &permissive_gate(),
+                "Engine",
+                "user1",
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            AuthError::Internal(msg) => {
+                assert!(msg.contains("simulated store delete failure"));
+            }
+            other => panic!("expected AuthError::Internal, got {:?}", other),
+        }
     }
 }

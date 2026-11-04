@@ -135,6 +135,11 @@ pub trait IndexedKvStore<T>: KvStore<T> {
 
 #[cfg(feature = "memory")]
 pub mod memory;
+#[cfg(all(
+    feature = "memory",
+    any(feature = "webauthn", feature = "totp", feature = "recovery-codes")
+))]
+pub use memory::MemoryCredentialStore;
 
 #[cfg(feature = "redis")]
 pub mod redis;

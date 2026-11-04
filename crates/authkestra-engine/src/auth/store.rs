@@ -88,4 +88,22 @@ pub trait CredentialStore: Send + Sync {
         let _ = (user_id, cred_type);
         Err(AuthError::Unsupported)
     }
+
+    /// Atomically claim a TOTP step for a credential, advancing its `last_used_step`
+    /// to `matched_step` if and only if `matched_step > last_used_step` (or if `last_used_step` was unset).
+    ///
+    /// # Atomicity
+    ///
+    /// Returns `Ok(true)` if this call successfully claimed and advanced the step.
+    /// Returns `Ok(false)` if the step was already claimed (i.e. `matched_step <= last_used_step`).
+    /// Returns `Err(AuthError::Unsupported)` by default for stores that do not implement atomic claim.
+    async fn claim_totp_step(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        matched_step: u64,
+    ) -> Result<bool, AuthError> {
+        let _ = (user_id, credential_id, matched_step);
+        Err(AuthError::Unsupported)
+    }
 }

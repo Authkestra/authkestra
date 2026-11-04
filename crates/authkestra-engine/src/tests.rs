@@ -705,6 +705,115 @@ mod authenticate_error_paths {
             Ok(AuthResult::Success(_))
         ));
     }
+
+    fn mfa_token_custom<S, T>(
+        engine: &Engine<S, T>,
+        sub: &str,
+        mfa_pending: bool,
+        primary_method: &str,
+        allowed_methods: Vec<String>,
+    ) -> String {
+        let mut claims = crate::auth::state::MfaTokenClaims::new(
+            sub,
+            (chrono::Utc::now() + chrono::Duration::minutes(10)).timestamp() as usize,
+            primary_method,
+        );
+        claims.mfa_pending = mfa_pending;
+        claims.allowed_methods = allowed_methods;
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(&engine.mfa_jwt_secret),
+        )
+        .expect("signing should succeed")
+    }
+
+    #[tokio::test]
+    async fn mfa_continuation_rejects_matching_primary_method() {
+        let engine = Engine::builder()
+            .with_mfa_method(FixedTotpMethod("user123"))
+            .build();
+        // Claims specify primary_method was "totp"
+        let token = mfa_token_custom(&engine, "user123", true, "totp", vec!["totp".to_string()]);
+
+        let result = engine.authenticate(totp_challenge(token)).await;
+        assert!(matches!(result, Err(AuthError::InvalidInput)));
+    }
+
+    #[tokio::test]
+    async fn mfa_continuation_rejects_method_not_in_allowed_methods() {
+        let engine = Engine::builder()
+            .with_mfa_method(FixedTotpMethod("user123"))
+            .build();
+        // Claims specify allowed_methods only contains "webauthn"
+        let token = mfa_token_custom(
+            &engine,
+            "user123",
+            true,
+            "password",
+            vec!["webauthn".to_string()],
+        );
+
+        let result = engine.authenticate(totp_challenge(token)).await;
+        assert!(matches!(result, Err(AuthError::InvalidInput)));
+    }
+
+    struct FailingStoreTotpMethod;
+    #[async_trait]
+    impl AuthMethod for FailingStoreTotpMethod {
+        fn name(&self) -> &str {
+            "totp"
+        }
+        async fn authenticate(&self, _input: AuthInput) -> Result<Identity, AuthError> {
+            Ok(Identity {
+                provider_id: "totp".to_string(),
+                external_id: "user123".to_string(),
+                email: None,
+                username: None,
+                attributes: HashMap::new(),
+            })
+        }
+        async fn has_enrolled(&self, _user_id: &str) -> Result<bool, AuthError> {
+            Err(AuthError::Internal("store is unreachable".to_string()))
+        }
+    }
+
+    struct SuccessfulPrimaryMethod;
+    #[async_trait]
+    impl AuthMethod for SuccessfulPrimaryMethod {
+        fn name(&self) -> &str {
+            "password"
+        }
+        async fn authenticate(&self, _input: AuthInput) -> Result<Identity, AuthError> {
+            Ok(Identity {
+                provider_id: "password".to_string(),
+                external_id: "user123".to_string(),
+                email: None,
+                username: None,
+                attributes: HashMap::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn mfa_has_enrolled_error_propagates_and_does_not_fail_open() {
+        let engine = Engine::builder()
+            .with_auth_method(SuccessfulPrimaryMethod)
+            .with_mfa_method(FailingStoreTotpMethod)
+            .build();
+
+        let result = engine
+            .authenticate(AuthInput::Password {
+                identifier: "user123".to_string(),
+                password: "secret".to_string(),
+            })
+            .await;
+
+        match result {
+            Err(AuthError::Internal(msg)) => assert!(msg.contains("store is unreachable")),
+            other => panic!("expected Err(AuthError::Internal), got {:?}", other),
+        }
+    }
 }
 
 // --- `amr`/step-up bookkeeping stamped onto `Identity::attributes` ---

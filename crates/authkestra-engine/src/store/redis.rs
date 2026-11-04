@@ -96,18 +96,22 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for Red
             StoreError::Serialization(format!("Serialization error: {e}"))
         })?;
 
-        let ttl_secs = ttl.as_secs();
-        if ttl_secs == 0 {
-            tracing::warn!("ttl is 0, not saving to redis");
+        if ttl.is_zero() {
+            tracing::debug!(key = %key, "ttl is 0, deleting key from redis");
+            let _: () = conn.del(self.key(key)).await.map_err(|e| {
+                tracing::error!(error = %e, "Redis del error");
+                StoreError::Internal(format!("Redis del error: {e}"))
+            })?;
             return Ok(());
         }
 
+        let ttl_ms = ttl.as_millis() as u64;
         let _: () = conn
-            .set_ex(self.key(key), json, ttl_secs)
+            .pset_ex(self.key(key), json, ttl_ms)
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "Redis set error");
-                StoreError::Internal(format!("Redis set error: {e}"))
+                tracing::error!(error = %e, "Redis pset_ex error");
+                StoreError::Internal(format!("Redis pset_ex error: {e}"))
             })?;
 
         Ok(())
@@ -354,17 +358,23 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> 
             StoreError::Serialization(format!("Serialization error: {e}"))
         })?;
 
-        let ttl_secs = ttl.as_secs();
-        if ttl_secs == 0 {
-            tracing::warn!("ttl is 0, not saving to redis");
+        if ttl.is_zero() {
+            tracing::debug!(key = %key, index = %index, "ttl is 0, deleting indexed key from redis");
+            let mut pipe = redis::pipe();
+            pipe.atomic().del(self.key(key)).del(self.index_key(index));
+            let _: () = pipe.query_async(&mut conn).await.map_err(|e| {
+                tracing::error!(error = %e, "Redis del error");
+                StoreError::Internal(format!("Redis del error: {e}"))
+            })?;
             return Ok(());
         }
 
+        let ttl_ms = ttl.as_millis() as u64;
         let mut pipe = redis::pipe();
-        pipe.atomic().set_ex(self.key(key), json, ttl_secs).set_ex(
+        pipe.atomic().pset_ex(self.key(key), json, ttl_ms).pset_ex(
             self.index_key(index),
             key.to_string(),
-            ttl_secs,
+            ttl_ms,
         );
 
         let _: () = pipe.query_async(&mut conn).await.map_err(|e| {
@@ -572,5 +582,66 @@ mod tests {
         // This should return None and clean up the orphaned index
         let sk_res2: Option<String> = store.get_by_index("sk1").await.unwrap();
         assert_eq!(sk_res2, None);
+    }
+
+    #[tokio::test]
+    async fn test_redis_set_with_zero_ttl_deletes_and_sub_second_uses_milliseconds() {
+        let (store, _c) = setup_redis().await;
+
+        // Set with sub-second / millisecond TTL
+        store
+            .set("ms_key", "value".to_string(), Duration::from_millis(1500))
+            .await
+            .unwrap();
+
+        let mut conn = store
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .unwrap();
+        let pttl: i64 = redis::AsyncCommands::pttl(&mut conn, store.key("ms_key"))
+            .await
+            .unwrap();
+        assert!(
+            pttl > 500 && pttl <= 1500,
+            "pttl should be within 1500ms window, got {pttl}"
+        );
+
+        // Setting with zero TTL deletes key
+        store
+            .set("zero_key", "value".to_string(), Duration::from_secs(10))
+            .await
+            .unwrap();
+        let res_some: Option<String> = store.get("zero_key").await.unwrap();
+        assert_eq!(res_some, Some("value".to_string()));
+
+        store
+            .set("zero_key", "value".to_string(), Duration::ZERO)
+            .await
+            .unwrap();
+        let res_none: Option<String> = store.get("zero_key").await.unwrap();
+        assert_eq!(res_none, None);
+
+        // Setting indexed with zero TTL deletes both keys
+        store
+            .set_indexed(
+                "idx_pk",
+                "idx_sk",
+                "value".to_string(),
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        let pk_some: Option<String> = store.get("idx_pk").await.unwrap();
+        assert_eq!(pk_some, Some("value".to_string()));
+
+        store
+            .set_indexed("idx_pk", "idx_sk", "value".to_string(), Duration::ZERO)
+            .await
+            .unwrap();
+        let pk_none: Option<String> = store.get("idx_pk").await.unwrap();
+        let sk_none: Option<String> = store.get_by_index("idx_sk").await.unwrap();
+        assert_eq!(pk_none, None);
+        assert_eq!(sk_none, None);
     }
 }

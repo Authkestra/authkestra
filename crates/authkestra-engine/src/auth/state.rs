@@ -199,6 +199,10 @@ pub struct MfaTokenClaims {
     /// step-up factor that this call actually verified.
     #[serde(default)]
     pub primary_method: String,
+    /// The list of enrolled MFA method names offered when this challenge was minted.
+    /// Used by `Engine::authenticate` to restrict continuation inputs to authorized second factors.
+    #[serde(default, alias = "available_methods")]
+    pub allowed_methods: Vec<String>,
 }
 
 impl MfaTokenClaims {
@@ -218,7 +222,25 @@ impl MfaTokenClaims {
             mfa_pending: true,
             exp,
             primary_method: primary_method.into(),
+            allowed_methods: Vec::new(),
         }
+    }
+
+    /// Sets the allowed second-factor methods for this continuation challenge.
+    pub fn with_allowed_methods(mut self, methods: Vec<String>) -> Self {
+        self.allowed_methods = methods;
+        self
+    }
+
+    /// Alias for `with_allowed_methods`.
+    pub fn with_available_methods(mut self, methods: Vec<String>) -> Self {
+        self.allowed_methods = methods;
+        self
+    }
+
+    /// Returns the allowed continuation methods.
+    pub fn available_methods(&self) -> &[String] {
+        &self.allowed_methods
     }
 }
 
