@@ -191,7 +191,7 @@ pub fn verify_dpop_proof(
     let ath_bound = expected_ath.is_some();
     match &outcome {
         Ok(proof) => tracing::debug!(
-            jti = %proof.jti,
+            jti = ?proof.jti,
             htm = %expected_htm,
             htu = ?expected_htu,
             ath_bound,

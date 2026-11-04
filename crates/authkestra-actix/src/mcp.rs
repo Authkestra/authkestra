@@ -311,7 +311,6 @@ pub async fn actix_approve_submit_handler(
         Ok(result) => {
             tracing::info!(
                 approval_id = %approval_id,
-                execution_token = %result.execution_token,
                 "step-up challenge approved and execution token minted (actix)"
             );
             HttpResponse::Ok().json(result)

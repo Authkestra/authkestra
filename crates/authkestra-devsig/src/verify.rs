@@ -72,20 +72,33 @@ pub async fn verify(
     match &outcome {
         Ok(identity) => tracing::debug!(
             target: "authkestra_devsig",
-            subject = %identity.subject,
-            device = %identity.device,
-            method = %request.method,
-            path = %request.path,
+            subject = ?identity.subject,
+            device = ?identity.device,
+            method = ?request.method,
+            path = ?request.path,
             "device-signature request accepted"
         ),
-        Err(error) => tracing::warn!(
-            target: "authkestra_devsig",
-            reason = error.code(),
-            %error,
-            method = %request.method,
-            path = %request.path,
-            "device-signature request rejected"
-        ),
+        Err(error) => {
+            let sanitized_error: String = error
+                .to_string()
+                .chars()
+                .flat_map(|c| {
+                    if c.is_control() {
+                        c.escape_default().collect::<Vec<_>>()
+                    } else {
+                        vec![c]
+                    }
+                })
+                .collect();
+            tracing::warn!(
+                target: "authkestra_devsig",
+                reason = error.code(),
+                error = %sanitized_error,
+                method = ?request.method,
+                path = ?request.path,
+                "device-signature request rejected"
+            );
+        }
     }
 
     outcome

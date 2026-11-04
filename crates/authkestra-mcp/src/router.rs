@@ -630,7 +630,6 @@ impl McpRouter {
 
         tracing::info!(
             approval_id = %approval_id,
-            execution_token = %execution_token,
             approver = %human_identity.external_id,
             "human step-up approval recorded and execution proof token minted"
         );
