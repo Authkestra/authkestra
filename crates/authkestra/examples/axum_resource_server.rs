@@ -99,9 +99,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     validation.algorithms = validation_config.algorithms;
     if let Some(iss) = validation_config.issuer {
         validation.set_issuer(&[iss]);
+        validation.required_spec_claims.insert("iss".to_string());
     }
     if let Some(aud) = config.audience.as_deref() {
         validation.set_audience(&[aud]);
+        validation.required_spec_claims.insert("aud".to_string());
     }
 
     let state = AppState {

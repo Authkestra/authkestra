@@ -199,6 +199,7 @@ pub struct Claims {
     pub aud: Option<Audience>,
     pub exp: usize,
     pub iat: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nbf: Option<usize>,
     pub jti: Option<String>,
 
@@ -735,17 +736,27 @@ impl TokenManager {
     ) -> Result<Claims, AuthError> {
         let mut validation = Validation::new(self.alg);
         validation.leeway = self.leeway;
+        validation.validate_nbf = true;
         if let Some(aud) = expected_aud {
             validation.set_audience(&[aud]);
+            validation.required_spec_claims.insert("aud".to_string());
         } else {
             validation.validate_aud = false;
         }
         if let Some(ref iss) = self.issuer {
             validation.set_issuer(&[iss]);
+            validation.required_spec_claims.insert("iss".to_string());
         }
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
             .map_err(|e| AuthError::Token(e.to_string()))?;
+
+        if expected_aud.is_some() && token_data.claims.aud.is_none() {
+            return Err(AuthError::Token("Missing required aud claim".to_string()));
+        }
+        if self.issuer.is_some() && token_data.claims.iss.is_none() {
+            return Err(AuthError::Token("Missing required iss claim".to_string()));
+        }
 
         Ok(token_data.claims)
     }
@@ -2051,5 +2062,73 @@ mod leeway_tests {
     fn the_configured_value_is_readable_back() {
         assert_eq!(manager().leeway(), DEFAULT_LEEWAY_SECS);
         assert_eq!(manager().with_leeway(5).leeway(), 5);
+    }
+
+    #[test]
+    fn validate_token_enforces_not_before_claim() {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = Claims {
+            iss: Some("https://op.example".to_string()),
+            sub: "user-1".to_string(),
+            aud: Some(Audience::Single("api".to_string())),
+            exp: now + 3600,
+            iat: now,
+            nbf: Some(now + 300),
+            jti: None,
+            scope: None,
+            identity: None,
+            extra: HashMap::new(),
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .expect("signing should succeed");
+
+        let err = TokenManager::new(SECRET, Some("https://op.example".to_string()))
+            .with_leeway(0)
+            .validate_token(&token, Some("api"))
+            .expect_err("future nbf must be rejected");
+        assert!(
+            err.to_string().contains("ImmatureSignature"),
+            "expected ImmatureSignature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_token_rejects_missing_or_null_aud_and_iss_when_configured() {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let manager = TokenManager::new(SECRET, Some("https://op.example".to_string()));
+
+        // Missing `aud` when `expected_aud` is provided
+        let no_aud_payload = serde_json::json!({
+            "iss": "https://op.example",
+            "sub": "user-1",
+            "exp": now + 3600,
+            "iat": now,
+        });
+        let no_aud_token = encode(
+            &Header::new(Algorithm::HS256),
+            &no_aud_payload,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        assert!(manager.validate_token(&no_aud_token, Some("api")).is_err());
+
+        // Missing `iss` when `manager.issuer` is configured
+        let no_iss_payload = serde_json::json!({
+            "sub": "user-1",
+            "aud": "api",
+            "exp": now + 3600,
+            "iat": now,
+        });
+        let no_iss_token = encode(
+            &Header::new(Algorithm::HS256),
+            &no_iss_payload,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        assert!(manager.validate_token(&no_iss_token, Some("api")).is_err());
     }
 }
