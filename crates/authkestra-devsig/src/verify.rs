@@ -120,7 +120,22 @@ async fn verify_inner(
 
     // --- Step 8: REPLAY — fails closed: a store error rejects exactly like a genuine replay,
     // never falls back to "allow". ---
-    let ttl = Duration::from_secs((sig.exp - now).max(0) as u64);
+    // Retain replay markers across the entire freshness acceptance interval, including configured
+    // clock skew and inclusive whole-second timestamp granularity, preventing replay at the boundary.
+    let clock_skew_secs = config.max_clock_skew.as_secs() as i64;
+    let ttl_secs = sig
+        .exp
+        .saturating_add(clock_skew_secs)
+        .saturating_add(1)
+        .saturating_sub(now)
+        .max(1) as u64;
+    let ttl = Duration::from_secs(ttl_secs);
+    tracing::debug!(
+        target: "authkestra_devsig",
+        jti = %sig.jti,
+        ttl_secs = ttl_secs,
+        "registering replay marker with skew-inclusive TTL"
+    );
     match replay_store.put_if_absent(&sig.jti, ttl).await {
         Ok(true) => {}
         // These two keep their own events despite the boundary above, because

@@ -960,7 +960,10 @@ async fn test_adversarial_approval_race_condition() {
         CONCURRENCY
     );
 
-    // In a perfectly atomic system, exactly 1 token should be minted per approval_id.
-    // However, if approve_challenge uses get() followed by delete() on pending_store,
-    // concurrent callers might both read the pending challenge before either deletes it.
+    // In an atomic consume system, exactly 1 token must be minted per approval_id.
+    assert_eq!(
+        tokens.len(),
+        1,
+        "atomic consume must guarantee exactly 1 token is minted across concurrent approve calls"
+    );
 }

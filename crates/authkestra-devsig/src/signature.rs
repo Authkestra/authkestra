@@ -216,18 +216,45 @@ pub fn verify_bound_and_signed(
     if claims.aud != config.audience {
         return Err(VerifyError::AudienceMismatch);
     }
-    if let Some(query) = request.query {
-        let computed = hex_sha256(query.as_bytes());
-        match &claims.qsh {
-            Some(qsh) if constant_time_eq(qsh, &computed) => {}
-            _ => return Err(VerifyError::QueryMismatch),
+    if request.query.is_some() || claims.qsh.is_some() {
+        match (request.query, &claims.qsh) {
+            (Some(query), Some(qsh)) => {
+                let computed = hex_sha256(query.as_bytes());
+                if !constant_time_eq(qsh, &computed) {
+                    tracing::warn!(target: "authkestra_devsig", "query string hash mismatch");
+                    return Err(VerifyError::QueryMismatch);
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    target: "authkestra_devsig",
+                    request_has_query = request.query.is_some(),
+                    claims_has_qsh = claims.qsh.is_some(),
+                    "query hash stripping or unexpected query parameter detected"
+                );
+                return Err(VerifyError::QueryMismatch);
+            }
         }
     }
-    if let Some(body) = request.body {
-        let computed = hex_sha256(body);
-        match &claims.bdh {
-            Some(bdh) if constant_time_eq(bdh, &computed) => {}
-            _ => return Err(VerifyError::BodyMismatch),
+
+    if request.body.is_some() || claims.bdh.is_some() {
+        match (request.body, &claims.bdh) {
+            (Some(body), Some(bdh)) => {
+                let computed = hex_sha256(body);
+                if !constant_time_eq(bdh, &computed) {
+                    tracing::warn!(target: "authkestra_devsig", "body digest hash mismatch");
+                    return Err(VerifyError::BodyMismatch);
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    target: "authkestra_devsig",
+                    request_has_body = request.body.is_some(),
+                    claims_has_bdh = claims.bdh.is_some(),
+                    "body digest stripping or unexpected body detected"
+                );
+                return Err(VerifyError::BodyMismatch);
+            }
         }
     }
 

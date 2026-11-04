@@ -7,7 +7,7 @@ use crate::protocol::*;
 use crate::resource_metadata::ProtectedResourceMetadata;
 use crate::security::McpSecurityTier;
 use authkestra_engine::auth::state::Identity;
-use authkestra_engine::store::{AtomicConsume, KvStore};
+use authkestra_engine::store::AtomicConsume;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::future::Future;
@@ -75,8 +75,9 @@ pub struct McpRouter {
     metadata_url: String,
     approval_base_url: String,
     token_broker: Option<Arc<dyn DownstreamTokenBroker>>,
-    pending_store: Arc<dyn KvStore<PendingApprovalChallenge>>,
+    pending_store: Arc<dyn AtomicConsume<PendingApprovalChallenge>>,
     execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
+    allow_unverified_identity_header: bool,
     #[cfg(feature = "policy")]
     policy_engine: Option<Arc<authkestra_policy::CedarPolicyEngine>>,
 }
@@ -84,10 +85,15 @@ pub struct McpRouter {
 impl McpRouter {
     /// Starts building a new `McpRouter`.
     pub fn builder(
-        pending_store: Arc<dyn KvStore<PendingApprovalChallenge>>,
+        pending_store: Arc<dyn AtomicConsume<PendingApprovalChallenge>>,
         execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
     ) -> McpRouterBuilder {
         McpRouterBuilder::new(pending_store, execution_store)
+    }
+
+    /// Returns whether this router allows unverified identity extraction from headers.
+    pub fn allows_unverified_identity_header(&self) -> bool {
+        self.allow_unverified_identity_header
     }
 
     /// Returns a reference to the configured Cedar policy engine, if any.
@@ -112,7 +118,7 @@ impl McpRouter {
     }
 
     /// Returns a reference to the pending approval challenge store.
-    pub fn pending_store(&self) -> &Arc<dyn KvStore<PendingApprovalChallenge>> {
+    pub fn pending_store(&self) -> &Arc<dyn AtomicConsume<PendingApprovalChallenge>> {
         &self.pending_store
     }
 
@@ -285,17 +291,16 @@ impl McpRouter {
         if let Some(ref engine) = self.policy_engine {
             let principal_str = match identity {
                 Some(ref id) => {
-                    let escaped_ext = id.external_id.replace('\\', "\\\\").replace('"', "\\\"");
-                    if id.provider_id.is_empty() {
-                        format!(r#"User::"{escaped_ext}""#)
-                    } else {
-                        let escaped_prov =
-                            id.provider_id.replace('\\', "\\\\").replace('"', "\\\"");
-                        format!(r#"User::"{escaped_prov}|{escaped_ext}""#)
-                    }
+                    authkestra_resource::format_principal_uid_str(&id.provider_id, &id.external_id)
                 }
                 None => r#"User::"anonymous""#.to_string(),
             };
+
+            tracing::debug!(
+                principal = %principal_str,
+                tool = %tool.name,
+                "evaluating Cedar policy for MCP tool execution"
+            );
 
             let principal = authkestra_policy::parse_entity_uid(&principal_str).map_err(|e| {
                 McpError::Internal(format!("Failed to parse principal entity uid: {e}"))
@@ -604,8 +609,22 @@ impl McpRouter {
             }
         }
 
-        // Delete pending challenge so it cannot be approved twice
-        let _ = self.pending_store.delete(&key).await;
+        // Atomically claim and consume the pending challenge so concurrent requests
+        // cannot approve the same challenge more than once.
+        let challenge = self
+            .pending_store
+            .consume(&key)
+            .await
+            .map_err(|e| McpError::Store(e.to_string()))?
+            .ok_or_else(|| {
+                tracing::warn!(
+                    approval_id = %approval_id,
+                    "pending approval challenge already claimed or expired during atomic consume"
+                );
+                McpError::Unauthorized(
+                    "Pending approval challenge already claimed or expired".to_string(),
+                )
+            })?;
 
         // Mint single-use execution token
         let execution_token = Uuid::new_v4().to_string();
@@ -648,8 +667,9 @@ pub struct McpRouterBuilder {
     metadata_url: String,
     approval_base_url: String,
     token_broker: Option<Arc<dyn DownstreamTokenBroker>>,
-    pending_store: Arc<dyn KvStore<PendingApprovalChallenge>>,
+    pending_store: Arc<dyn AtomicConsume<PendingApprovalChallenge>>,
     execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
+    allow_unverified_identity_header: bool,
     #[cfg(feature = "policy")]
     policy_engine: Option<Arc<authkestra_policy::CedarPolicyEngine>>,
 }
@@ -657,7 +677,7 @@ pub struct McpRouterBuilder {
 impl McpRouterBuilder {
     /// Creates a new builder with the required storage backends.
     pub fn new(
-        pending_store: Arc<dyn KvStore<PendingApprovalChallenge>>,
+        pending_store: Arc<dyn AtomicConsume<PendingApprovalChallenge>>,
         execution_store: Arc<dyn AtomicConsume<ApprovedExecutionRecord>>,
     ) -> Self {
         Self {
@@ -668,9 +688,20 @@ impl McpRouterBuilder {
             token_broker: None,
             pending_store,
             execution_store,
+            allow_unverified_identity_header: false,
             #[cfg(feature = "policy")]
             policy_engine: None,
         }
+    }
+
+    /// Explicitly allows extracting unverified caller identity from the `x-authkestra-identity` header.
+    ///
+    /// # Security
+    /// Only enable this in local development or test suites. In production, identities must
+    /// be established and verified by authentication middleware.
+    pub fn allow_unverified_identity_header(mut self, allow: bool) -> Self {
+        self.allow_unverified_identity_header = allow;
+        self
     }
 
     /// Sets the Cedar policy engine for declarative tool authorization.
@@ -720,6 +751,7 @@ impl McpRouterBuilder {
             token_broker: self.token_broker,
             pending_store: self.pending_store,
             execution_store: self.execution_store,
+            allow_unverified_identity_header: self.allow_unverified_identity_header,
             #[cfg(feature = "policy")]
             policy_engine: self.policy_engine,
         }

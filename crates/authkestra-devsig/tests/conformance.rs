@@ -564,6 +564,58 @@ async fn case_17_altered_query_is_rejected() {
     assert_eq!(err, VerifyError::QueryMismatch);
 }
 
+/// Case 17b: query string stripped when `qsh` is present in signature -> query_mismatch.
+#[tokio::test]
+async fn case_17b_stripped_query_is_rejected() {
+    let setup = TestSetup::new().await;
+    let attestation = setup.valid_attestation();
+    let signature =
+        setup.valid_signature_with_query(&setup.device, "GET", "/v1/accounts", "page=1");
+
+    let request = SignedRequest {
+        signature: Some(&signature),
+        attestation: Some(&attestation),
+        method: "GET",
+        path: "/v1/accounts",
+        query: None, // stripped query!
+        body: None,
+    };
+
+    let store = InMemoryReplayStore::new();
+    let err = authkestra_devsig::verify(&request, &setup.config, &setup.jwks, &store)
+        .await
+        .unwrap_err();
+    assert_eq!(err, VerifyError::QueryMismatch);
+}
+
+/// Case 17c: body stripped when `bdh` is present in signature -> body_mismatch.
+#[tokio::test]
+async fn case_17c_stripped_body_is_rejected() {
+    let setup = TestSetup::new().await;
+    let attestation = setup.valid_attestation();
+    let signature = setup.valid_signature_with_body(
+        &setup.device,
+        "POST",
+        "/v1/payments/transfer",
+        b"amount=100",
+    );
+
+    let request = SignedRequest {
+        signature: Some(&signature),
+        attestation: Some(&attestation),
+        method: "POST",
+        path: "/v1/payments/transfer",
+        query: None,
+        body: None, // stripped body!
+    };
+
+    let store = InMemoryReplayStore::new();
+    let err = authkestra_devsig::verify(&request, &setup.config, &setup.jwks, &store)
+        .await
+        .unwrap_err();
+    assert_eq!(err, VerifyError::BodyMismatch);
+}
+
 /// Case 18: clock skew within tolerance -> Accept.
 #[tokio::test]
 async fn case_18_clock_skew_within_tolerance_is_accepted() {
@@ -951,4 +1003,57 @@ fn canary_upstream_jsonwebtoken_still_verifies_eddsa_non_strictly() {
              have adopted verify_strict, so authkestra#242's local workaround can be revisited"
         );
     }
+}
+
+/// Verifies that the replay marker TTL covers the remaining signature validity PLUS clock skew PLUS 1 second.
+#[tokio::test]
+async fn test_replay_marker_ttl_includes_clock_skew_and_inclusive_second() {
+    use authkestra_devsig::{ReplayError, ReplayStore};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    struct CapturingStore {
+        recorded_ttl_secs: AtomicU64,
+    }
+
+    #[async_trait::async_trait]
+    impl ReplayStore for CapturingStore {
+        async fn put_if_absent(&self, _jti: &str, ttl: Duration) -> Result<bool, ReplayError> {
+            self.recorded_ttl_secs
+                .store(ttl.as_secs(), Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    let setup = TestSetup::new().await;
+    let attestation = setup.valid_attestation();
+    // Signature valid from now to now + 60s
+    let signature =
+        setup.valid_signature(&setup.device, "POST", "/v1/payments/transfer", None, None);
+
+    let store = CapturingStore {
+        recorded_ttl_secs: AtomicU64::new(0),
+    };
+
+    let request = SignedRequest {
+        signature: Some(&signature),
+        attestation: Some(&attestation),
+        method: "POST",
+        path: "/v1/payments/transfer",
+        query: None,
+        body: None,
+    };
+
+    authkestra_devsig::verify(&request, &setup.config, &setup.jwks, &store)
+        .await
+        .expect("verify succeeds");
+
+    let captured = store.recorded_ttl_secs.load(Ordering::SeqCst);
+    let skew_secs = setup.config.max_clock_skew.as_secs();
+    // The TTL must be at least the remaining validity (approx 60s) + skew_secs (30s) + 1s.
+    // Allow slight execution delay: captured should be >= 50 + skew_secs + 1.
+    assert!(
+        captured >= skew_secs + 30,
+        "replay TTL ({captured}s) must include clock skew ({skew_secs}s) and inclusive second"
+    );
 }
