@@ -162,7 +162,17 @@ When a `HumanApproved` tool call arrives without an execution proof token:
 2. A SHA-256 digest is computed over `(session_id, tool_name, jcs_canonical_arguments, expires_at)`.
 3. The server responds with JSON-RPC error code `-32001` (`RPC_STEP_UP_REQUIRED`) containing the challenge digest and approval URL.
 4. When the human approves, an `ApprovedExecutionRecord` is minted in `KvStore`.
-5. Upon retry with the execution token, the router re-canonicalizes the arguments and re-computes the digest. If *any* argument was changed, re-ordered keys retain the same hash, but altered values (or injected keys) produce a hash mismatch, failing immediately with `-32003` (`RPC_PARAMETER_MISMATCH`).
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:5bcb8b2f514bb413aa094a8fc5b88e0ca8abf4dc3a2a1d1a2964f8b02f894f4e -->
+
+5. On retry, the router checks the canonicalized arguments against the approved digest. Reordered object keys are accepted; changed values or injected keys fail the binding check.
+
+For `HumanApproved` calls, arguments are rejected with `RPC_INVALID_PARAMS` if JCS changes their JSON numeric value or type. For example, use strings for affected large integers; floating-point values such as `50.0` and `-0.0` also fail this check because JCS renders them as integers. The same validation applies when creating and redeeming an approval. An invalid retry consumes its execution token.
+
+Upgrading to this validation invalidates pending challenges and execution tokens created by the previous version. Request a new approval after upgrading.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ---
 
