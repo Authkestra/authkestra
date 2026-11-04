@@ -1,8 +1,10 @@
-use authkestra_crypto_util::CryptoError;
+use authkestra_crypto_util::{encrypt_aes_256_gcm, CryptoError};
 use authkestra_engine::auth::state::Identity;
 use authkestra_engine::store::memory::MemoryStore;
 use authkestra_engine::store::KvStore;
-use authkestra_mcp::{BrokerError, DownstreamToken, DownstreamTokenBroker, EncryptedKvTokenVault};
+use authkestra_mcp::{
+    BrokerError, DownstreamToken, DownstreamTokenBroker, EncryptedKvTokenVault, ToolContext,
+};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -99,6 +101,135 @@ async fn test_cross_identity_vault_isolation() {
         .unwrap();
 
     assert_eq!(mallory_result, None);
+}
+
+#[tokio::test]
+async fn test_ambiguous_legacy_tuples_are_isolated_for_all_operations() {
+    let raw_store: Arc<dyn KvStore<Vec<u8>>> = Arc::new(MemoryStore::new());
+    let vault = Arc::new(EncryptedKvTokenVault::new(raw_store, VAULT_KEY));
+    let owner = make_identity("corp:dept", "user:svc");
+    let other_provider = make_identity("corp", "dept:user:svc");
+    let other_service = make_identity("corp:dept", "user");
+    let token = DownstreamToken {
+        access_token: "owner-token".into(),
+        refresh_token: None,
+        token_type: "Bearer".into(),
+        scopes: vec!["read".into()],
+        expires_at: None,
+    };
+    vault
+        .store_token(&owner, "api", &token, Duration::from_secs(60))
+        .await
+        .unwrap();
+
+    // Both alternate tuples had the same legacy key as the owner.
+    for (identity, service) in [(&other_provider, "api"), (&other_service, "svc:api")] {
+        let context = ToolContext::new("session")
+            .with_identity(identity.clone())
+            .with_broker(vault.clone());
+        assert_eq!(
+            context
+                .get_downstream_token(service, &["read"])
+                .await
+                .unwrap(),
+            None
+        );
+        vault.revoke_token(identity, service).await.unwrap();
+    }
+    let mut other_token = token.clone();
+    other_token.access_token = "other-token".into();
+    vault
+        .store_token(
+            &other_service,
+            "svc:api",
+            &other_token,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .resolve_token(&owner, "api", &["read"])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("owner-token")
+    );
+    assert_eq!(
+        vault
+            .resolve_token(&other_service, "svc:api", &["read"])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("other-token")
+    );
+}
+
+#[tokio::test]
+async fn test_copied_ciphertext_is_rejected_for_each_binding_component() {
+    let raw_store: Arc<dyn KvStore<Vec<u8>>> = Arc::new(MemoryStore::new());
+    let vault = EncryptedKvTokenVault::new(Arc::clone(&raw_store), VAULT_KEY);
+    let owner = make_identity("corp", "alice");
+    let token = DownstreamToken {
+        access_token: "owner-token".into(),
+        refresh_token: None,
+        token_type: "Bearer".into(),
+        scopes: vec![],
+        expires_at: None,
+    };
+    vault
+        .store_token(&owner, "api", &token, Duration::from_secs(60))
+        .await
+        .unwrap();
+    let ciphertext = raw_store
+        .get(&EncryptedKvTokenVault::storage_key(&owner, "api"))
+        .await
+        .unwrap()
+        .unwrap();
+    for (identity, service) in [
+        (make_identity("other", "alice"), "api"),
+        (make_identity("corp", "bob"), "api"),
+        (owner.clone(), "other"),
+    ] {
+        raw_store
+            .set(
+                &EncryptedKvTokenVault::storage_key(&identity, service),
+                ciphertext.clone(),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            vault.resolve_token(&identity, service, &[]).await,
+            Err(BrokerError::RecordMismatch)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn test_legacy_records_are_not_resolved_or_revoked() {
+    let raw_store: Arc<dyn KvStore<Vec<u8>>> = Arc::new(MemoryStore::new());
+    let vault = EncryptedKvTokenVault::new(Arc::clone(&raw_store), VAULT_KEY);
+    let identity = make_identity("corp", "alice");
+    let token = DownstreamToken {
+        access_token: "legacy-token".into(),
+        refresh_token: None,
+        token_type: "Bearer".into(),
+        scopes: vec![],
+        expires_at: None,
+    };
+    let legacy_key = "mcp:vault:corp:alice:api";
+    let ciphertext = encrypt_aes_256_gcm(&serde_json::to_vec(&token).unwrap(), &VAULT_KEY).unwrap();
+    raw_store
+        .set(legacy_key, ciphertext, Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.resolve_token(&identity, "api", &[]).await.unwrap(),
+        None
+    );
+    vault.revoke_token(&identity, "api").await.unwrap();
+    assert!(raw_store.get(legacy_key).await.unwrap().is_some());
 }
 
 #[tokio::test]

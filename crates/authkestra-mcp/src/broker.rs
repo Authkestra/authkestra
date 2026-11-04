@@ -26,6 +26,9 @@ pub enum BrokerError {
     #[error("serialization error: {0}")]
     Serialization(String),
 
+    #[error("downstream token record identity or service mismatch")]
+    RecordMismatch,
+
     #[error("insufficient scopes for downstream service '{service}': required {required:?}, granted {granted:?}")]
     InsufficientScope {
         service: String,
