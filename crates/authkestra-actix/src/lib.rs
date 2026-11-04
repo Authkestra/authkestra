@@ -92,7 +92,9 @@ where
             "/callback/{provider}",
             web::get().to(actix_callback_handler::<S, T>),
         );
-        scope = scope.route("/logout", web::get().to(actix_logout_handler::<S, T>));
+        scope = scope
+            .route("/logout", web::get().to(actix_logout_handler::<S, T>))
+            .route("/logout", web::post().to(actix_logout_handler::<S, T>));
 
         scope
     }
@@ -172,7 +174,13 @@ impl FromRequest for AuthSession {
                     actix_web::error::ErrorUnauthorized("Invalid session")
                 })?;
 
-            tracing::info!(session_id = %session.id, user_id = %session.identity.external_id, "successfully extracted actix AuthSession");
+            if session.expires_at <= chrono::Utc::now() {
+                tracing::warn!("session expired in actix AuthSession extractor; deleting");
+                let _ = store.get_ref().delete_session(&session_id).await;
+                return Err(actix_web::error::ErrorUnauthorized("Session expired"));
+            }
+
+            tracing::info!(user_id = %session.identity.external_id, "successfully extracted actix AuthSession");
             Ok(AuthSession(session))
         })
     }

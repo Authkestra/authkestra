@@ -779,3 +779,237 @@ async fn a_store_that_cannot_delete_fails_the_logout_and_says_why() {
         "a failed deletion must not pass for a successful logout; got:\n{logs}"
     );
 }
+
+#[actix_web::test]
+async fn expired_session_in_actix_extractor_is_rejected_and_cleaned_up() {
+    let session_store = std::sync::Arc::new(TestSessionStore::default());
+    let expired_session = Session::new(
+        "expired-session-id".to_string(),
+        Identity {
+            provider_id: "mock".to_string(),
+            external_id: "user-42".to_string(),
+            email: None,
+            username: None,
+            attributes: HashMap::new(),
+        },
+        chrono::Utc::now() - chrono::Duration::minutes(5),
+    );
+    session_store.save_session(&expired_session).await.unwrap();
+
+    let engine = Engine::builder()
+        .provider(OAuth2Flow::new(MockOAuthProvider))
+        .session_store(session_store.clone() as std::sync::Arc<dyn SessionStore>)
+        .session_config(SessionConfig {
+            secure: false,
+            ..Default::default()
+        })
+        .build();
+
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(move |cfg| state.configure_authkestra(cfg))
+            .route("/protected", web::get().to(protected))
+            .service(engine.actix_scope()),
+    )
+    .await;
+
+    let cookie_name = SessionConfig::default().cookie_name;
+    let req = test::TestRequest::get()
+        .uri("/protected")
+        .cookie(Cookie::new(cookie_name, "expired-session-id"))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(session_store
+        .sessions
+        .lock()
+        .unwrap()
+        .get("expired-session-id")
+        .is_none());
+}
+
+#[actix_web::test]
+async fn unsafe_success_url_is_sanitized_to_default_redirect_actix() {
+    let engine = build_engine();
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(move |cfg| state.configure_authkestra(cfg))
+            .route("/protected", web::get().to(protected))
+            .service(engine.actix_scope()),
+    )
+    .await;
+
+    let req = test::TestRequest::get()
+        .uri("/auth/login/mock?success_url=https://attacker.com")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let state_cookie = set_cookie_value(&resp, "ak_state").expect("must set ak_state cookie");
+    let state_param = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .and_then(|l| l.split("state=").nth(1))
+        .expect("the redirect carries a state parameter")
+        .to_string();
+
+    let callback_req = test::TestRequest::get()
+        .uri(&format!(
+            "/auth/callback/mock?code=valid-code&state={state_param}"
+        ))
+        .cookie(Cookie::new("ak_state", state_cookie))
+        .to_request();
+    let callback_resp = test::call_service(&app, callback_req).await;
+    assert_eq!(callback_resp.status(), StatusCode::SEE_OTHER);
+    let location = callback_resp
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(location, "/");
+}
+
+#[actix_web::test]
+async fn safe_success_url_is_preserved_on_callback_actix() {
+    let engine = build_engine();
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(move |cfg| state.configure_authkestra(cfg))
+            .route("/protected", web::get().to(protected))
+            .service(engine.actix_scope()),
+    )
+    .await;
+
+    let req = test::TestRequest::get()
+        .uri("/auth/login/mock?success_url=/dashboard/home")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let state_cookie = set_cookie_value(&resp, "ak_state").expect("must set ak_state cookie");
+    let state_param = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .and_then(|l| l.split("state=").nth(1))
+        .expect("the redirect carries a state parameter")
+        .to_string();
+
+    let callback_req = test::TestRequest::get()
+        .uri(&format!(
+            "/auth/callback/mock?code=valid-code&state={state_param}"
+        ))
+        .cookie(Cookie::new("ak_state", state_cookie))
+        .to_request();
+    let callback_resp = test::call_service(&app, callback_req).await;
+    assert_eq!(callback_resp.status(), StatusCode::SEE_OTHER);
+    let location = callback_resp
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(location, "/dashboard/home");
+}
+
+#[actix_web::test]
+async fn logout_rejects_cross_site_fetch_metadata_actix() {
+    let engine = build_engine();
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(move |cfg| state.configure_authkestra(cfg))
+            .route("/protected", web::get().to(protected))
+            .service(engine.actix_scope()),
+    )
+    .await;
+    let cookie_name = SessionConfig::default().cookie_name;
+
+    // Cross-site GET
+    let req = test::TestRequest::get()
+        .uri("/auth/logout")
+        .cookie(Cookie::new(cookie_name.clone(), "test-session-id"))
+        .insert_header(("sec-fetch-site", "cross-site"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Cross-site POST
+    let req_post = test::TestRequest::post()
+        .uri("/auth/logout")
+        .cookie(Cookie::new(cookie_name, "test-session-id"))
+        .insert_header(("sec-fetch-site", "cross-site"))
+        .to_request();
+    let resp_post = test::call_service(&app, req_post).await;
+    assert_eq!(resp_post.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[actix_web::test]
+async fn logout_via_post_succeeds_for_same_origin_actix() {
+    let session_store = std::sync::Arc::new(TestSessionStore::default());
+    let valid_session = Session::new(
+        "post-session-id".to_string(),
+        Identity {
+            provider_id: "mock".to_string(),
+            external_id: "user-42".to_string(),
+            email: None,
+            username: None,
+            attributes: HashMap::new(),
+        },
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    );
+    session_store.save_session(&valid_session).await.unwrap();
+
+    let engine = Engine::builder()
+        .provider(OAuth2Flow::new(MockOAuthProvider))
+        .session_store(session_store.clone() as std::sync::Arc<dyn SessionStore>)
+        .session_config(SessionConfig {
+            secure: false,
+            ..Default::default()
+        })
+        .build();
+
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(move |cfg| state.configure_authkestra(cfg))
+            .route("/protected", web::get().to(protected))
+            .service(engine.actix_scope()),
+    )
+    .await;
+
+    let cookie_name = SessionConfig::default().cookie_name;
+    let req = test::TestRequest::post()
+        .uri("/auth/logout")
+        .cookie(Cookie::new(cookie_name, "post-session-id"))
+        .insert_header(("sec-fetch-site", "same-origin"))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(session_store
+        .sessions
+        .lock()
+        .unwrap()
+        .get("post-session-id")
+        .is_none());
+}

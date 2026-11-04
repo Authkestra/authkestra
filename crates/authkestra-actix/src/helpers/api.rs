@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 use actix_web::{cookie::Cookie, http::header, web, HttpRequest, HttpResponse};
+pub use authkestra_engine::auth::{is_safe_relative_url, Session, SessionConfig, SessionStore};
 use authkestra_engine::auth::{Identity, OAuthToken};
-pub use authkestra_engine::auth::{Session, SessionConfig, SessionStore};
 use authkestra_engine::pkce::Pkce;
 use authkestra_engine::{state::OAuth2State, Engine, ErasedOAuthFlow, OAuth2Flow};
 #[allow(unused_imports)]
@@ -99,7 +99,15 @@ pub fn initiate_oauth_login_erased(
     let (url, mut auth_state) = flow.initiate_login(scopes, Some(&pkce.code_challenge));
 
     auth_state.code_verifier = Some(pkce.code_verifier);
-    auth_state.success_url = success_url;
+    let safe_success_url = match success_url {
+        Some(ref u) if is_safe_relative_url(u) => success_url,
+        Some(invalid) => {
+            tracing::warn!(%invalid, "unsafe or invalid success_url provided in login request; ignoring");
+            None
+        }
+        None => None,
+    };
+    auth_state.success_url = safe_success_url;
 
     let encrypted = auth_state
         .encrypt(&config.state_encryption_key)
@@ -268,9 +276,24 @@ pub async fn handle_oauth_callback_erased(
         .max_age(actix_web::cookie::time::Duration::ZERO)
         .finish();
 
-    let final_success_url = expected_state
-        .success_url
-        .unwrap_or_else(|| "/".to_string());
+    let final_success_url = match expected_state.success_url {
+        Some(ref u) if is_safe_relative_url(u) => u.clone(),
+        Some(ref invalid) => {
+            tracing::warn!(%invalid, "unsafe success_url found in OAuth state during callback redirect; falling back to default");
+            if is_safe_relative_url(_success_url) && !_success_url.is_empty() {
+                _success_url.to_string()
+            } else {
+                "/".to_string()
+            }
+        }
+        None => {
+            if is_safe_relative_url(_success_url) && !_success_url.is_empty() {
+                _success_url.to_string()
+            } else {
+                "/".to_string()
+            }
+        }
+    };
 
     Ok(HttpResponse::SeeOther()
         .insert_header((header::LOCATION, final_success_url))
@@ -363,6 +386,19 @@ pub async fn logout(
     config: SessionConfig,
     redirect_to: &str,
 ) -> Result<HttpResponse, actix_web::Error> {
+    if req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("cross-site"))
+        .unwrap_or(false)
+    {
+        tracing::warn!("cross-site logout rejected via Sec-Fetch-Site");
+        return Err(actix_web::error::ErrorUnauthorized(
+            "Cross-site request rejected",
+        ));
+    }
+
     let session_id = req
         .cookie(&config.cookie_name)
         .map(|c: Cookie| c.value().to_string());
@@ -381,8 +417,15 @@ pub async fn logout(
 
     let remove_cookie = create_actix_cookie(&config, "".to_string());
 
+    let target = if is_safe_relative_url(redirect_to) {
+        redirect_to
+    } else {
+        tracing::warn!(%redirect_to, "unsafe redirect_to in logout; falling back to '/'");
+        "/"
+    };
+
     Ok(HttpResponse::SeeOther()
-        .insert_header((header::LOCATION, redirect_to))
+        .insert_header((header::LOCATION, target))
         .cookie(remove_cookie)
         .finish())
 }

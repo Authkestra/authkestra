@@ -266,7 +266,8 @@ impl<S: Clone + Send + Sync + 'static, T: Clone + Send + Sync + 'static> AxumExt
             )
             .route(
                 "/auth/logout",
-                get(helpers::axum_logout_handler::<AppState, S, T>),
+                get(helpers::axum_logout_handler::<AppState, S, T>)
+                    .post(helpers::axum_logout_handler::<AppState, S, T>),
             )
     }
 }

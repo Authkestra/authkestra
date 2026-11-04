@@ -528,3 +528,165 @@ async fn device_verify_with_a_session_records_the_users_approval() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await["success"], true);
 }
+
+#[tokio::test]
+async fn device_verify_rejects_cross_site_fetch_metadata() {
+    let resp = build_app(true)
+        .oneshot(with_session(
+            Request::builder()
+                .method("POST")
+                .uri("/device/verify")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("sec-fetch-site", "cross-site"),
+            Body::from(format!("user_code={USER_CODE}&approve=true")),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"], "access_denied");
+}
+
+#[tokio::test]
+async fn device_verify_rejects_origin_mismatch() {
+    let resp = build_app(true)
+        .oneshot(with_session(
+            Request::builder()
+                .method("POST")
+                .uri("/device/verify")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::ORIGIN, "https://attacker.example.com"),
+            Body::from(format!("user_code={USER_CODE}&approve=true")),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"], "access_denied");
+}
+
+#[tokio::test]
+async fn device_verify_accepts_matching_origin() {
+    let resp = build_app(true)
+        .oneshot(with_session(
+            Request::builder()
+                .method("POST")
+                .uri("/device/verify")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::ORIGIN, "https://op.example.com"),
+            Body::from(format!("user_code={USER_CODE}&approve=true")),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["success"], true);
+}
+
+#[tokio::test]
+async fn device_verify_rejects_invalid_csrf_token() {
+    let resp = build_app(true)
+        .oneshot(with_session(
+            Request::builder()
+                .method("POST")
+                .uri("/device/verify")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded"),
+            Body::from(format!(
+                "user_code={USER_CODE}&approve=true&csrf_token=invalid-token"
+            )),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"], "access_denied");
+}
+
+#[tokio::test]
+async fn device_verify_accepts_valid_csrf_token() {
+    let key = [99u8; 32];
+    let session_store = TestSessionStore::default();
+    session_store.sessions.lock().unwrap().insert(
+        SESSION_ID.to_string(),
+        Session::new(
+            SESSION_ID.to_string(),
+            Identity {
+                provider_id: "test".to_string(),
+                external_id: "user-123".to_string(),
+                email: Some("user@example.com".to_string()),
+                username: Some("user".to_string()),
+                attributes: HashMap::new(),
+            },
+            chrono::Utc::now() + chrono::Duration::hours(1),
+        ),
+    );
+
+    let op_store = TestOpStore::default();
+    op_store
+        .clients
+        .lock()
+        .unwrap()
+        .insert(CLIENT_ID.to_string(), test_client());
+    op_store.devices.lock().unwrap().insert(
+        DEVICE_CODE.to_string(),
+        DeviceCodeSession::new(
+            DEVICE_CODE.to_string(),
+            USER_CODE.to_string(),
+            CLIENT_ID.to_string(),
+            "openid".to_string(),
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+            DeviceCodeStatus::Pending,
+        ),
+    );
+
+    let mut sess_cfg = SessionConfig::new(key);
+    sess_cfg.secure = false;
+
+    let engine = Engine::builder()
+        .session_store(Arc::new(session_store) as Arc<dyn SessionStore>)
+        .session_config(sess_cfg)
+        .token_manager(Arc::new(TokenManager::new(
+            b"a-test-signing-key-that-is-32-bytes!!",
+            Some("https://op.example.com".to_string()),
+        )))
+        .build();
+
+    let state = AppState {
+        auth: engine.clone(),
+        op_store: Arc::new(op_store),
+        config: OpConfig {
+            issuer: "https://op.example.com".to_string(),
+            scopes_supported: vec!["openid".to_string()],
+            response_types_supported: vec!["code".to_string()],
+            grant_types_supported: vec!["authorization_code".to_string()],
+            id_token_signing_alg: "RS256".to_string(),
+            access_token_ttl_secs: 3600,
+            authorization_code_ttl_secs: 600,
+            device_code_ttl_secs: 600,
+            token_exchange_enabled: false,
+        },
+    };
+
+    let app = Router::new()
+        .merge(engine.op_axum_router())
+        .layer(CookieManagerLayer::new())
+        .with_state(state);
+
+    let valid_token = authkestra_op::handlers::device_verify::generate_csrf_token(&key, SESSION_ID);
+
+    let resp = app
+        .oneshot(with_session(
+            Request::builder()
+                .method("POST")
+                .uri("/device/verify")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded"),
+            Body::from(format!(
+                "user_code={USER_CODE}&approve=true&csrf_token={valid_token}"
+            )),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["success"], true);
+}

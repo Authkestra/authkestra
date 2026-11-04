@@ -786,3 +786,251 @@ async fn a_store_that_cannot_delete_fails_the_logout_and_says_why() {
         "a failed deletion must not pass for a successful logout; got:\n{logs}"
     );
 }
+
+#[tokio::test]
+async fn expired_session_in_axum_extractor_is_rejected_and_cleaned_up() {
+    let session_store = Arc::new(TestSessionStore::default());
+    let expired_session = Session::new(
+        "expired-session-id".to_string(),
+        Identity {
+            provider_id: "mock".to_string(),
+            external_id: "user-42".to_string(),
+            email: None,
+            username: None,
+            attributes: HashMap::new(),
+        },
+        chrono::Utc::now() - chrono::Duration::minutes(5),
+    );
+    session_store.save_session(&expired_session).await.unwrap();
+
+    let engine = Engine::builder()
+        .provider(OAuth2Flow::new(MockOAuthProvider))
+        .session_store(session_store.clone() as Arc<dyn SessionStore>)
+        .session_config(SessionConfig {
+            secure: false,
+            ..Default::default()
+        })
+        .build();
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = Router::new()
+        .route("/protected", get(protected))
+        .merge(engine.axum_router())
+        .layer(CookieManagerLayer::new())
+        .with_state(state);
+
+    let cookie_name = SessionConfig::default().cookie_name;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/protected")
+                .header(header::COOKIE, format!("{cookie_name}=expired-session-id"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(session_store
+        .sessions
+        .lock()
+        .unwrap()
+        .get("expired-session-id")
+        .is_none());
+}
+
+#[tokio::test]
+async fn unsafe_success_url_is_sanitized_to_default_redirect() {
+    let app = build_app();
+
+    // 1. Initiate login with an open redirect target
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/auth/login/mock?success_url=https://attacker.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let state_cookie = set_cookie_value(&resp, "ak_state").expect("must set ak_state cookie");
+    let state_param = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .and_then(|l| l.split("state=").nth(1))
+        .expect("the redirect carries a state parameter")
+        .to_string();
+
+    // 2. Callback should redirect to "/" rather than "https://attacker.com"
+    let callback_resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/auth/callback/mock?code=valid-code&state={state_param}"
+                ))
+                .header(header::COOKIE, format!("ak_state={state_cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(callback_resp.status(), StatusCode::SEE_OTHER);
+    let location = callback_resp
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(location, "/");
+}
+
+#[tokio::test]
+async fn safe_success_url_is_preserved_on_callback() {
+    let app = build_app();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/auth/login/mock?success_url=/dashboard/home")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let state_cookie = set_cookie_value(&resp, "ak_state").expect("must set ak_state cookie");
+    let state_param = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .and_then(|l| l.split("state=").nth(1))
+        .expect("the redirect carries a state parameter")
+        .to_string();
+
+    let callback_resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/auth/callback/mock?code=valid-code&state={state_param}"
+                ))
+                .header(header::COOKIE, format!("ak_state={state_cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(callback_resp.status(), StatusCode::SEE_OTHER);
+    let location = callback_resp
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(location, "/dashboard/home");
+}
+
+#[tokio::test]
+async fn logout_rejects_cross_site_fetch_metadata() {
+    let app = build_app();
+    let cookie_name = SessionConfig::default().cookie_name;
+
+    // Cross-site GET
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/auth/logout")
+                .header(header::COOKIE, format!("{cookie_name}=test-session-id"))
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Cross-site POST
+    let resp_post = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/logout")
+                .header(header::COOKIE, format!("{cookie_name}=test-session-id"))
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp_post.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn logout_via_post_succeeds_for_same_origin() {
+    let session_store = Arc::new(TestSessionStore::default());
+    let valid_session = Session::new(
+        "post-session-id".to_string(),
+        Identity {
+            provider_id: "mock".to_string(),
+            external_id: "user-42".to_string(),
+            email: None,
+            username: None,
+            attributes: HashMap::new(),
+        },
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    );
+    session_store.save_session(&valid_session).await.unwrap();
+
+    let engine = Engine::builder()
+        .provider(OAuth2Flow::new(MockOAuthProvider))
+        .session_store(session_store.clone() as Arc<dyn SessionStore>)
+        .session_config(SessionConfig {
+            secure: false,
+            ..Default::default()
+        })
+        .build();
+    let state = AppState {
+        auth: engine.clone(),
+    };
+    let app = Router::new()
+        .route("/protected", get(protected))
+        .merge(engine.axum_router())
+        .layer(CookieManagerLayer::new())
+        .with_state(state);
+
+    let cookie_name = SessionConfig::default().cookie_name;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/logout")
+                .header(header::COOKIE, format!("{cookie_name}=post-session-id"))
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(session_store
+        .sessions
+        .lock()
+        .unwrap()
+        .get("post-session-id")
+        .is_none());
+}
