@@ -867,6 +867,7 @@ fn build_resolver(config: &ValidationConfig) -> Box<dyn JwksResolver> {
 fn build_validation(config: &ValidationConfig, multi_issuer: bool) -> Validation {
     let mut validation = Validation::new(config.algorithms[0]);
     validation.algorithms = config.algorithms.clone();
+    validation.validate_nbf = true;
     // Set explicitly rather than left to `jsonwebtoken`'s default, so the
     // window in which an expired token is still honoured is this crate's
     // decision and is visible in `ValidationConfig` (#350).
