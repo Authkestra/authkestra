@@ -43,7 +43,10 @@ pub async fn handle_device_verify(
         session.status = DeviceCodeStatus::Denied;
     }
 
-    devices.update_device_code(session).await?;
+    devices.update_device_code(session).await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to update device code: record missing or no longer pending");
+        OpError::InvalidCode
+    })?;
 
     Ok(DeviceVerifyResponse { success: true })
 }
@@ -84,12 +87,62 @@ mod tests {
             approve: true,
         };
 
-        let res = handle_device_verify(req, identity, &mut devices)
+        let res = handle_device_verify(req, identity.clone(), &mut devices)
             .await
             .unwrap();
         assert!(res.success);
 
         let updated = devices.get_device_code("dev123").await.unwrap().unwrap();
         assert!(matches!(updated.status, DeviceCodeStatus::Approved(_)));
+
+        // Attempting to verify again must fail because it's no longer Pending
+        let req2 = DeviceVerifyRequest {
+            user_code: "USER123".to_string(),
+            approve: true,
+        };
+        let err = handle_device_verify(req2, identity, &mut devices)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OpError::InvalidCode));
+    }
+
+    #[tokio::test]
+    async fn test_update_device_code_rejects_non_pending() {
+        let mut devices = authkestra_engine::store::memory::MemoryStore::<
+            crate::device::DeviceCodeSession,
+        >::new();
+        let mut session = DeviceCodeSession::new(
+            "dev456".to_string(),
+            "USER456".to_string(),
+            "client1".to_string(),
+            "openid".to_string(),
+            Utc::now() + Duration::seconds(600),
+            DeviceCodeStatus::Denied,
+        );
+
+        // Not in store yet -> update fails
+        let err = devices
+            .update_device_code(session.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            authkestra_engine::store::StoreError::NotFound
+        ));
+
+        // Stored as Denied (not Pending) -> update fails
+        devices.store_device_code(session.clone()).await.unwrap();
+        session.status = DeviceCodeStatus::Approved(Identity {
+            provider_id: "test".to_string(),
+            external_id: "user2".to_string(),
+            username: None,
+            email: None,
+            attributes: HashMap::new(),
+        });
+        let err = devices.update_device_code(session).await.unwrap_err();
+        assert!(matches!(
+            err,
+            authkestra_engine::store::StoreError::NotFound
+        ));
     }
 }

@@ -211,6 +211,13 @@ pub async fn handle_authorize(
                 &format!("Scope {s} is not allowed for this client"),
             );
         }
+        if !config.allows_scope(s) {
+            tracing::warn!(client_id = %req.client_id, scope = %s, "Client requested scope not supported by provider");
+            return error_redirect(
+                "invalid_scope",
+                &format!("Scope {s} is not supported by this provider"),
+            );
+        }
     }
 
     // 4. Check response_type == "code"
@@ -1193,6 +1200,70 @@ mod tests {
         if let AuthorizeOutcome::Redirect(url) = outcome {
             assert!(url.contains("error=invalid_scope"));
             assert!(url.contains("error_description=Scope+admin+is+not+allowed"));
+        } else {
+            panic!("Expected Redirect");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scope_not_supported_by_provider_is_rejected() {
+        let clients = authkestra_engine::store::memory::MemoryStore::<
+            crate::client::ClientRegistration,
+        >::new();
+        clients
+            .set(
+                "client-1",
+                ClientRegistration {
+                    client_id: "client-1".to_string(),
+                    client_secret_hash: None,
+                    redirect_uris: vec!["https://app.example.com/cb".to_string()],
+                    grant_types: vec![GrantType::AuthorizationCode],
+                    scopes: vec!["openid".to_string(), "custom_unsupported".to_string()],
+                    require_pkce: false,
+                    allowed_audiences: vec![],
+                    token_endpoint_auth_method: None,
+                    jwks: None,
+                },
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let codes =
+            authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new();
+        // test_config only supports "openid" and "profile"
+        let config = test_config();
+
+        let req = AuthorizeRequest {
+            client_id: "client-1".to_string(),
+            redirect_uri: "https://app.example.com/cb".to_string(),
+            response_type: "code".to_string(),
+            scope: "custom_unsupported".to_string(),
+            state: None,
+            code_challenge: Some("s256challenge".to_string()),
+            code_challenge_method: Some("S256".to_string()),
+            nonce: None,
+            max_age: None,
+            prompt: None,
+        };
+
+        let outcome = handle_authorize(
+            req,
+            test_identity(),
+            &config,
+            &mut crate::store::CompositeOpStore::new(
+                clients,
+                codes,
+                authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+                authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(),
+            ),
+        )
+        .await;
+        if let AuthorizeOutcome::Redirect(url) = outcome {
+            assert!(url.contains("error=invalid_scope"));
+            assert!(url.contains(
+                "error_description=Scope+custom_unsupported+is+not+supported+by+this+provider"
+            ));
         } else {
             panic!("Expected Redirect");
         }

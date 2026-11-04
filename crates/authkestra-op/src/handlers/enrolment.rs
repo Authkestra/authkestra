@@ -142,7 +142,12 @@ pub async fn handle_enrol_start(
     parse_public_jwk(&req.public_jwk)?;
 
     second_factor
-        .verify(&req.subject, req.principal_type, &req.second_factor)
+        .verify(
+            &req.subject,
+            req.principal_type,
+            &req.second_factor,
+            &req.attributes,
+        )
         .await?;
 
     tracing::info!(
@@ -456,6 +461,7 @@ mod tests {
             _subject: &str,
             _principal_type: PrincipalType,
             _proof: &SecondFactorProof,
+            _attributes: &Value,
         ) -> Result<(), OpError> {
             Ok(())
         }
@@ -470,6 +476,7 @@ mod tests {
             _subject: &str,
             _principal_type: PrincipalType,
             _proof: &SecondFactorProof,
+            _attributes: &Value,
         ) -> Result<(), OpError> {
             Err(OpError::SecondFactorFailed)
         }
@@ -1379,5 +1386,69 @@ mod tests {
             .unwrap();
         assert_eq!(claims.extra.get("principal_type").unwrap(), "service");
         assert_eq!(claims.extra.get("did").unwrap(), "svc-bff-1");
+    }
+
+    struct AttributeGatedSecondFactor;
+
+    #[async_trait]
+    impl SecondFactorVerifier for AttributeGatedSecondFactor {
+        async fn verify(
+            &self,
+            _subject: &str,
+            _principal_type: PrincipalType,
+            _proof: &SecondFactorProof,
+            attributes: &Value,
+        ) -> Result<(), OpError> {
+            if attributes.get("role").and_then(|v| v.as_str()) == Some("admin") {
+                return Err(OpError::SecondFactorFailed);
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_second_factor_validates_attributes() {
+        let config = test_config();
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let key = generate_test_key();
+
+        // Request with disallowed attribute "role": "admin"
+        let bad_req = EnrolStartRequest {
+            subject: "user-1".to_string(),
+            principal_id: "device-1".to_string(),
+            principal_type: PrincipalType::Device,
+            public_jwk: key.public_jwk.clone(),
+            second_factor: SecondFactorProof {
+                kind: "otp".to_string(),
+                value: "123456".to_string(),
+            },
+            attributes: serde_json::json!({ "role": "admin" }),
+            requested_cnf_jkt: None,
+        };
+
+        let err = handle_enrol_start(bad_req, &AttributeGatedSecondFactor, &challenges, &config)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OpError::SecondFactorFailed));
+
+        // Request with allowed attributes
+        let good_req = EnrolStartRequest {
+            subject: "user-1".to_string(),
+            principal_id: "device-1".to_string(),
+            principal_type: PrincipalType::Device,
+            public_jwk: key.public_jwk,
+            second_factor: SecondFactorProof {
+                kind: "otp".to_string(),
+                value: "123456".to_string(),
+            },
+            attributes: serde_json::json!({ "role": "developer" }),
+            requested_cnf_jkt: None,
+        };
+
+        let start_res =
+            handle_enrol_start(good_req, &AttributeGatedSecondFactor, &challenges, &config)
+                .await
+                .unwrap();
+        assert!(!start_res.challenge.is_empty());
     }
 }

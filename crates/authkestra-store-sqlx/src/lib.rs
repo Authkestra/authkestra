@@ -686,6 +686,15 @@ macro_rules! impl_opstore_sql {
                 conn: &mut Conn,
                 session: DeviceCodeSession,
             ) -> Result<(), authkestra_engine::store::StoreError> {
+            let existing = get_device_code(conn, &session.device_code).await?;
+            match existing {
+                Some(e) if matches!(e.status, authkestra_op::device::DeviceCodeStatus::Pending) => {}
+                _ => {
+                    tracing::warn!("sqlx update_device_code rejected: session missing or not in Pending state");
+                    return Err(authkestra_engine::store::StoreError::NotFound);
+                }
+            }
+
             let query = format!(
                 "UPDATE {schema}oauth_device_codes 
                 SET status = {p1}, last_polled_at = {p2} 
@@ -696,7 +705,7 @@ macro_rules! impl_opstore_sql {
 
             let status_json = sqlx::types::Json(session.status);
 
-            sqlx::query(&query)
+            let res = sqlx::query(&query)
                 .bind(status_json)
                 .bind(session.last_polled_at)
                 .bind(session.device_code)
@@ -706,6 +715,11 @@ macro_rules! impl_opstore_sql {
                     tracing::error!(error = %e, "sqlx update_device_code error");
                     authkestra_engine::store::StoreError::Internal(format!("db error: {e}"))
                 })?;
+
+            if res.rows_affected() == 0 {
+                tracing::warn!("sqlx update_device_code affected 0 rows (record missing or modified)");
+                return Err(authkestra_engine::store::StoreError::NotFound);
+            }
             Ok(())
             }
 

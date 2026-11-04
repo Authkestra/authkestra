@@ -277,6 +277,7 @@ mod tests {
             _: &str,
             _: crate::PrincipalType,
             _: &crate::SecondFactorProof,
+            _: &serde_json::Value,
         ) -> Result<(), OpError> {
             Ok(())
         }

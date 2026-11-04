@@ -394,6 +394,13 @@ mod queries {
         conn: &C,
         session: DeviceCodeSession,
     ) -> Result<(), StoreError> {
+        let existing = get_device_code(conn, &session.device_code).await?;
+        match existing {
+            Some(e) if matches!(e.status, DeviceCodeStatus::Pending) => {}
+            _ => {
+                return Err(StoreError::NotFound);
+            }
+        }
         device_code_active_model(&session)?
             .update(conn)
             .await

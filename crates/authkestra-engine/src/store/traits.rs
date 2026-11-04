@@ -1,6 +1,6 @@
 use crate::oauth2::client::ClientRegistration;
 use crate::oauth2::code::AuthorizationCode;
-use crate::oauth2::device::DeviceCodeSession;
+use crate::oauth2::device::{DeviceCodeSession, DeviceCodeStatus};
 use crate::oauth2::refresh::RefreshToken;
 use crate::store::StoreError;
 use async_trait::async_trait;
@@ -210,17 +210,33 @@ where
     }
 
     async fn update_device_code(&mut self, session: DeviceCodeSession) -> Result<(), StoreError> {
-        // Same 5-minute post-expiry grace as `store_device_code` — updating
-        // a session (e.g. marking it Approved) must not shorten that window
-        // back down to zero.
-        let ttl = device_code_ttl(session.expires_at);
-        self.set_indexed(
-            &session.device_code.clone(),
-            &session.user_code.clone(),
-            session,
-            ttl,
-        )
-        .await
+        let current = self.get_device_code(&session.device_code).await?;
+        match current {
+            Some(existing) if matches!(existing.status, DeviceCodeStatus::Pending) => {
+                let ttl = device_code_ttl(session.expires_at);
+                self.set_indexed(
+                    &session.device_code.clone(),
+                    &session.user_code.clone(),
+                    session,
+                    ttl,
+                )
+                .await
+            }
+            Some(_) => {
+                tracing::warn!(
+                    device_code = %session.device_code,
+                    "update_device_code rejected: session is no longer in Pending state"
+                );
+                Err(StoreError::NotFound)
+            }
+            None => {
+                tracing::warn!(
+                    device_code = %session.device_code,
+                    "update_device_code rejected: session not found"
+                );
+                Err(StoreError::NotFound)
+            }
+        }
     }
 
     async fn delete_device_code(&mut self, device_code: &str) -> Result<(), StoreError> {

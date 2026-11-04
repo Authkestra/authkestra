@@ -5,7 +5,7 @@ use authkestra_engine::store::sqlite_url::is_private_memory_url;
 use authkestra_engine::store::StoreError;
 use authkestra_op::client::{ClientRegistration, ClientStore};
 use authkestra_op::code::{AuthorizationCode, AuthorizationCodeStore};
-use authkestra_op::device::{DeviceCodeSession, DeviceCodeStore};
+use authkestra_op::device::{DeviceCodeSession, DeviceCodeStatus, DeviceCodeStore};
 use authkestra_op::refresh::{RefreshToken, RefreshTokenStore};
 use authkestra_op::store::OpStore;
 use diesel::connection::{AnsiTransactionManager, TransactionManager};
@@ -583,6 +583,11 @@ mod queries {
         row: DeviceCodeRow,
         device_code: String,
     ) -> Result<(), StoreError> {
+        let existing = get_device_code(conn, device_code.clone())?;
+        match existing {
+            Some(e) if matches!(e.status, DeviceCodeStatus::Pending) => {}
+            _ => return Err(StoreError::NotFound),
+        }
         diesel::update(oauth_device_codes::table.find(device_code))
             .set(&row)
             .execute(conn)

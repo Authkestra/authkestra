@@ -7,12 +7,17 @@ use crate::error::OpError;
 use crate::refresh::RefreshToken;
 use crate::store::OpStore;
 use authkestra_engine::token::cert_binding::x5t_s256_thumbprint;
-use authkestra_engine::token::{Audience, Claims, TokenManager};
+use authkestra_engine::token::{sanitize_identity_for_scopes, Audience, Claims, TokenManager};
 use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
+
+/// Helper to check if a space-delimited scope string contains an exact scope token.
+pub(crate) fn has_scope(scope: &str, target: &str) -> bool {
+    scope.split_whitespace().any(|s| s == target)
+}
 
 fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audience {
     match allowed_audiences {
@@ -920,6 +925,29 @@ async fn handle_device_code(
             };
 
             if let DeviceCodeStatus::Approved(identity) = consumed.status {
+                for s in session.scope.split_whitespace() {
+                    if !config.allows_scope(s) {
+                        tracing::warn!(client_id = %client_id, scope = %s, "Device code carries scope not supported by provider");
+                        return Err(TokenErrorResponse {
+                            error: "invalid_scope".to_string(),
+                            error_description: format!(
+                                "Scope {} is not supported by this provider",
+                                s
+                            ),
+                        });
+                    }
+                    if !client.allows_scope(s) {
+                        tracing::warn!(client_id = %client_id, scope = %s, "Device code carries scope not allowed for this client");
+                        return Err(TokenErrorResponse {
+                            error: "invalid_scope".to_string(),
+                            error_description: format!(
+                                "Scope {} is not allowed for this client",
+                                s
+                            ),
+                        });
+                    }
+                }
+
                 let expires_in = config.access_token_ttl_secs;
                 let scope_opt = if session.scope.is_empty() {
                     None
@@ -927,12 +955,15 @@ async fn handle_device_code(
                     Some(session.scope.clone())
                 };
 
+                let sanitized_identity =
+                    sanitize_identity_for_scopes(&identity, Some(&session.scope));
+
                 let mut extra = HashMap::new();
                 merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
                 let access_token = match tokens.issue_access_token(
                     access_token_issuer(tokens, config),
-                    identity.clone(),
+                    sanitized_identity.clone(),
                     &client_id,
                     user_token_audience(&client_id, &client.allowed_audiences),
                     expires_in,
@@ -948,10 +979,10 @@ async fn handle_device_code(
                     }
                 };
 
-                let id_token = if session.scope.contains("openid") {
+                let id_token = if has_scope(&session.scope, "openid") {
                     let id_extra = crate::amr_acr::amr_acr_extra_claims(&identity);
                     match tokens.issue_id_token_with_extra(
-                        identity.clone(),
+                        sanitized_identity,
                         &client_id,
                         None,
                         expires_in,
@@ -970,7 +1001,7 @@ async fn handle_device_code(
                 };
 
                 let mut issued_refresh_token = None;
-                if session.scope.contains("offline_access") {
+                if has_scope(&session.scope, "offline_access") {
                     let refresh_val = uuid::Uuid::new_v4().to_string();
                     // RFC 9449 §5: a refresh token minted alongside a
                     // DPoP-bound access token must itself be bound to the
@@ -1172,6 +1203,23 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
         });
     }
 
+    for s in auth_code.scope.split_whitespace() {
+        if !config.allows_scope(s) {
+            tracing::warn!(client_id = %client_id, scope = %s, "Authorization code carries scope not supported by provider");
+            return Err(TokenErrorResponse {
+                error: "invalid_scope".to_string(),
+                error_description: format!("Scope {} is not supported by this provider", s),
+            });
+        }
+        if !client.allows_scope(s) {
+            tracing::warn!(client_id = %client_id, scope = %s, "Authorization code carries scope not allowed for this client");
+            return Err(TokenErrorResponse {
+                error: "invalid_scope".to_string(),
+                error_description: format!("Scope {} is not allowed for this client", s),
+            });
+        }
+    }
+
     // 7. Issue tokens
     let expires_in = config.access_token_ttl_secs;
     let scope_opt = if auth_code.scope.is_empty() {
@@ -1180,12 +1228,15 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
         Some(auth_code.scope.clone())
     };
 
+    let sanitized_identity =
+        sanitize_identity_for_scopes(&auth_code.identity, Some(&auth_code.scope));
+
     let mut extra = HashMap::new();
     merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
     let access_token = match tokens.issue_access_token(
         access_token_issuer(tokens, config),
-        auth_code.identity.clone(),
+        sanitized_identity.clone(),
         &client_id,
         user_token_audience(&client_id, &client.allowed_audiences),
         expires_in,
@@ -1202,10 +1253,10 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
         }
     };
 
-    let id_token = if auth_code.scope.contains("openid") {
+    let id_token = if has_scope(&auth_code.scope, "openid") {
         let id_extra = crate::amr_acr::amr_acr_extra_claims(&auth_code.identity);
         match tokens.issue_id_token_with_extra(
-            auth_code.identity.clone(),
+            sanitized_identity,
             &client_id,
             auth_code.nonce.clone(),
             expires_in,
@@ -1226,7 +1277,7 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
 
     // Issue refresh token if requested
     let mut issued_refresh_token = None;
-    if auth_code.scope.contains("offline_access") {
+    if has_scope(&auth_code.scope, "offline_access") {
         let refresh_val = uuid::Uuid::new_v4().to_string();
         // RFC 9449 §5: see the identical comment in `handle_device_code`.
         let rt_model = RefreshToken::new(
@@ -1492,6 +1543,13 @@ async fn handle_client_credentials(
     if let Some(ref scopes) = requested_scope {
         let requested: Vec<&str> = scopes.split_whitespace().collect();
         for s in requested {
+            if !config.allows_scope(s) {
+                tracing::warn!(client_id = %client_id, scope = %s, "Client requested scope not supported by provider");
+                return Err(TokenErrorResponse {
+                    error: "invalid_scope".to_string(),
+                    error_description: format!("Scope {} is not supported by this provider", s),
+                });
+            }
             if !client.scopes.contains(&s.to_string()) {
                 tracing::warn!(client_id = %client_id, scope = %s, "Client requested unauthorized scope");
                 return Err(TokenErrorResponse {
@@ -1711,6 +1769,17 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
     // after `consume_token` below: a request that is refused must not
     // destroy the token it had no right to consume (authkestra#287).
     for scope in candidate.scope.split_whitespace() {
+        if !config.allows_scope(scope) {
+            tracing::warn!(
+                client_id = %client_id,
+                scope = %scope,
+                "Refresh token carries a scope not supported by provider"
+            );
+            return Err(TokenErrorResponse {
+                error: "invalid_scope".to_string(),
+                error_description: format!("Scope {} is not supported by this provider", scope),
+            });
+        }
         if !client.allows_scope(scope) {
             tracing::warn!(
                 client_id = %client_id,
@@ -1789,12 +1858,14 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
         Some(old_rt.scope.clone())
     };
 
+    let sanitized_identity = sanitize_identity_for_scopes(&old_rt.identity, Some(&old_rt.scope));
+
     let mut extra = HashMap::new();
     merge_dpop_cnf(&mut extra, jkt.as_deref());
 
     let access_token = match tokens.issue_access_token(
         access_token_issuer(tokens, config),
-        old_rt.identity.clone(),
+        sanitized_identity.clone(),
         &client_id,
         user_token_audience(&client_id, &client.allowed_audiences),
         expires_in,
@@ -1818,10 +1889,10 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
     // reflecting the original `/authorize` request) — Core §12.2 lists
     // `nonce` as OPTIONAL on a refreshed id_token, so omitting it is
     // conformant, not a shortcut.
-    let id_token = if old_rt.scope.contains("openid") {
+    let id_token = if has_scope(&old_rt.scope, "openid") {
         let id_extra = crate::amr_acr::amr_acr_extra_claims(&old_rt.identity);
         match tokens.issue_id_token_with_extra(
-            old_rt.identity.clone(),
+            sanitized_identity,
             &client_id,
             None,
             expires_in,
@@ -1988,22 +2059,19 @@ pub async fn default_handle_token_exchange(
     }
 
     // Determine the resource audience for the new token
-    let new_aud = if let Some(requested_aud) = req.audience {
-        if !client.allowed_audiences.contains(&requested_aud) {
-            tracing::warn!(
-                client_id = %client_id,
-                audience = %requested_aud,
-                "Requested audience is not allowed for this client"
-            );
-            return Err(TokenErrorResponse {
-                error: "invalid_target".to_string(),
-                error_description: "Requested audience is not allowed".to_string(),
-            });
-        }
-        Some(requested_aud)
-    } else {
-        Some(config.issuer.clone())
-    };
+    let target_aud = req.audience.unwrap_or_else(|| config.issuer.clone());
+    if !client.allowed_audiences.is_empty() && !client.allowed_audiences.contains(&target_aud) {
+        tracing::warn!(
+            client_id = %client_id,
+            audience = %target_aud,
+            "Target audience is not allowed for this client"
+        );
+        return Err(TokenErrorResponse {
+            error: "invalid_target".to_string(),
+            error_description: "Requested audience is not allowed".to_string(),
+        });
+    }
+    let new_aud = Some(target_aud);
 
     // Scope narrowing logic
     let original_scope = claims.scope.unwrap_or_default();
@@ -2017,7 +2085,10 @@ pub async fn default_handle_token_exchange(
 
     let mut intersected_scopes = Vec::new();
     for s in requested_scopes {
-        if original_scopes.contains(&s) && client.scopes.contains(&s.to_string()) {
+        if original_scopes.contains(&s)
+            && client.scopes.contains(&s.to_string())
+            && config.allows_scope(s)
+        {
             intersected_scopes.push(s.to_string());
         }
     }
@@ -2048,6 +2119,9 @@ pub async fn default_handle_token_exchange(
         }
     };
 
+    let sanitized_identity =
+        sanitize_identity_for_scopes(&identity, Some(final_scope_str.as_deref().unwrap_or("")));
+
     let expires_in = config.access_token_ttl_secs;
     let granted_openid = final_scope_str
         .as_deref()
@@ -2065,7 +2139,7 @@ pub async fn default_handle_token_exchange(
     let id_token = if granted_openid {
         let id_extra = crate::amr_acr::amr_acr_extra_claims(&identity);
         match tokens.issue_id_token_with_extra(
-            identity.clone(),
+            sanitized_identity.clone(),
             &client_id,
             None,
             expires_in,
@@ -2088,7 +2162,7 @@ pub async fn default_handle_token_exchange(
     merge_dpop_cnf(&mut extra, dpop_jkt.as_deref());
 
     let access_token = match tokens.issue_user_token_with_extra(
-        identity,
+        sanitized_identity,
         expires_in,
         final_scope_str.clone(),
         new_aud,
@@ -2148,7 +2222,11 @@ mod tests {
             scopes_supported: vec![
                 "openid".to_string(),
                 "profile".to_string(),
+                "offline_access".to_string(),
                 "custom".to_string(),
+                "scopeA".to_string(),
+                "scopeB".to_string(),
+                "scopeC".to_string(),
             ],
             response_types_supported: vec!["code".to_string()],
             grant_types_supported: vec!["authorization_code".to_string()],
@@ -5266,6 +5344,190 @@ mod tests {
             .unwrap();
         // default aud should be config.issuer
         assert!(claim.aud.unwrap().contains("https://auth.example.com"));
+    }
+
+    #[tokio::test]
+    async fn test_tx_default_audience_rejected_when_not_in_allowed_audiences() {
+        let tokens = test_tokens();
+        let subject_token = issue_subject_token(&tokens, "client1", None);
+        let req = default_tx_req(&subject_token);
+        // No audience requested, so target_aud defaults to config.issuer ("https://auth.example.com").
+        // But client allowed_audiences is ["https://api.partner.com"].
+        let clients = authkestra_engine::store::memory::MemoryStore::<
+            crate::client::ClientRegistration,
+        >::new();
+        clients
+            .set(
+                "client1",
+                ClientRegistration {
+                    client_id: "client1".to_string(),
+                    client_secret_hash: None,
+                    redirect_uris: vec![],
+                    grant_types: vec![GrantType::TokenExchange],
+                    scopes: vec![],
+                    require_pkce: false,
+                    allowed_audiences: vec!["https://api.partner.com".to_string()],
+                    token_endpoint_auth_method: None,
+                    jwks: None,
+                },
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let res = handle_token(
+            req,
+            None,
+            &test_config(true),
+            &mut crate::store::CompositeOpStore::new(
+                clients.clone(),
+                authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new(),
+                authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+                authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(),
+            ),
+            &tokens,
+        )
+        .await;
+        let err = res.unwrap_err();
+        assert_eq!(err.error, "invalid_target");
+        assert_eq!(err.error_description, "Requested audience is not allowed");
+    }
+
+    #[tokio::test]
+    async fn test_token_code_rejected_when_scope_not_supported_by_provider() {
+        let clients = authkestra_engine::store::memory::MemoryStore::<
+            crate::client::ClientRegistration,
+        >::new();
+        clients
+            .set(
+                "client1",
+                ClientRegistration {
+                    client_id: "client1".to_string(),
+                    client_secret_hash: None,
+                    redirect_uris: vec!["https://cb".to_string()],
+                    grant_types: vec![GrantType::AuthorizationCode],
+                    scopes: vec!["openid".to_string(), "unsupported_scope".to_string()],
+                    require_pkce: false,
+                    allowed_audiences: vec![],
+                    token_endpoint_auth_method: None,
+                    jwks: None,
+                },
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let verifier = "verifier_test_123456789012345678901234";
+        let mut hasher = sha2::Sha256::new();
+        sha2::Digest::update(&mut hasher, verifier.as_bytes());
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        let mut codes =
+            authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new();
+        let mut code = AuthorizationCode::new(
+            "c1".to_string(),
+            "client1".to_string(),
+            "https://cb".to_string(),
+            "openid unsupported_scope".to_string(),
+            test_identity(),
+            Utc::now() + Duration::seconds(60),
+            false,
+        );
+        code.code_challenge = Some(challenge.clone());
+        code.code_challenge_method = Some("S256".to_string());
+        codes.store_code(code).await.unwrap();
+
+        let mut req = TokenRequest::new("authorization_code".to_string());
+        req.code = Some("c1".to_string());
+        req.redirect_uri = Some("https://cb".to_string());
+        req.client_id = Some("client1".to_string());
+        req.code_verifier = Some(verifier.to_string());
+
+        let mut store = crate::store::CompositeOpStore::new(
+            clients,
+            codes,
+            authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+            authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+            ),
+        );
+
+        // test_config only supports ["openid", "profile", "custom", ...] (does not support unsupported_scope)
+        let res = handle_token(req, None, &test_config(false), &mut store, &test_tokens()).await;
+        let err = res.unwrap_err();
+        assert_eq!(err.error, "invalid_scope");
+        assert!(err.error_description.contains("unsupported_scope"));
+    }
+
+    #[tokio::test]
+    async fn test_token_exact_scope_matching_for_openid_and_offline_access() {
+        let clients = authkestra_engine::store::memory::MemoryStore::<
+            crate::client::ClientRegistration,
+        >::new();
+        clients
+            .set(
+                "client1",
+                ClientRegistration {
+                    client_id: "client1".to_string(),
+                    client_secret_hash: None,
+                    redirect_uris: vec!["https://cb".to_string()],
+                    grant_types: vec![GrantType::AuthorizationCode],
+                    // Client allowed scopes have substrings of openid and offline_access
+                    scopes: vec!["not_openid".to_string(), "offline_access_plus".to_string()],
+                    require_pkce: false,
+                    allowed_audiences: vec![],
+                    token_endpoint_auth_method: None,
+                    jwks: None,
+                },
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let verifier = "verifier_test_123456789012345678901234";
+        let mut hasher = sha2::Sha256::new();
+        sha2::Digest::update(&mut hasher, verifier.as_bytes());
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        let mut codes =
+            authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new();
+        let mut code = AuthorizationCode::new(
+            "c2".to_string(),
+            "client1".to_string(),
+            "https://cb".to_string(),
+            "not_openid offline_access_plus".to_string(),
+            test_identity(),
+            Utc::now() + Duration::seconds(60),
+            false,
+        );
+        code.code_challenge = Some(challenge);
+        code.code_challenge_method = Some("S256".to_string());
+        codes.store_code(code).await.unwrap();
+
+        let mut req = TokenRequest::new("authorization_code".to_string());
+        req.code = Some("c2".to_string());
+        req.redirect_uri = Some("https://cb".to_string());
+        req.client_id = Some("client1".to_string());
+        req.code_verifier = Some(verifier.to_string());
+
+        let mut store = crate::store::CompositeOpStore::new(
+            clients,
+            codes,
+            authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+            authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+            ),
+        );
+
+        let mut config = test_config(false);
+        config.scopes_supported = vec!["not_openid".to_string(), "offline_access_plus".to_string()];
+
+        let res = handle_token(req, None, &config, &mut store, &test_tokens())
+            .await
+            .unwrap();
+        // Since neither exact "openid" nor exact "offline_access" is present,
+        // no id_token and no refresh_token should be issued!
+        assert!(res.id_token.is_none());
+        assert!(res.refresh_token.is_none());
+        assert!(!res.access_token.is_empty());
     }
 
     #[tokio::test]

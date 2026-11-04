@@ -53,6 +53,7 @@ impl SecondFactorVerifier for DemoOtpVerifier {
         _subject: &str,
         _principal_type: PrincipalType,
         proof: &SecondFactorProof,
+        _attributes: &serde_json::Value,
     ) -> Result<(), OpError> {
         if proof.kind == "demo_otp" && proof.value == "123456" {
             Ok(())
