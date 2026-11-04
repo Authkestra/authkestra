@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-mcp-v0.14.0...authkestra-mcp-v0.15.0) - 2026-11-04
+
+### Fixed
+
+- *(mcp)* prevent cross-identity token exposure in the vault ([#424](https://github.com/Authkestra/authkestra/pull/424))
+- *(mcp)* prevent approval bypass through lossy JCS canonicalization ([#425](https://github.com/Authkestra/authkestra/pull/425))
+
 ## [0.13.3](https://github.com/Authkestra/authkestra/compare/authkestra-mcp-v0.13.2...authkestra-mcp-v0.13.3) - 2026-10-26
 
 ### Added
