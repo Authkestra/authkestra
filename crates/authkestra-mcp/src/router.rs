@@ -416,7 +416,7 @@ impl McpRouter {
                     // No execution token provided -> Mint PendingApprovalChallenge and return elicitation
                     let approval_id = Uuid::new_v4().to_string();
                     let expires_at = Utc::now().timestamp() + *approval_ttl_secs as i64;
-                    let jcs_bytes = canonicalize_json(&raw_args)?;
+                    let jcs_bytes = canonicalize_approval_arguments(&raw_args)?;
                     let challenge_digest =
                         compute_challenge_digest(&session_id, &tool.name, &jcs_bytes, expires_at);
 
@@ -439,9 +439,11 @@ impl McpRouter {
                         "persisting pending approval challenge in KvStore"
                     );
 
+                    // Use a new namespace so approvals issued before lossless-value
+                    // validation cannot be redeemed after upgrading.
                     self.pending_store
                         .set(
-                            &format!("mcp:pending:{}", approval_id),
+                            &format!("mcp:v2:pending:{}", approval_id),
                             challenge,
                             Duration::from_secs(*approval_ttl_secs),
                         )
@@ -466,7 +468,7 @@ impl McpRouter {
                 };
 
                 // Single-use atomic consumption of execution token
-                let record_key = format!("mcp:exec:{}", execution_token);
+                let record_key = format!("mcp:v2:exec:{}", execution_token);
                 let record_opt = self
                     .execution_store
                     .consume(&record_key)
@@ -499,7 +501,7 @@ impl McpRouter {
                 }
 
                 // Verify cryptographic parameter binding: canonicalize remaining arguments
-                let jcs_bytes = canonicalize_json(&raw_args)?;
+                let jcs_bytes = canonicalize_approval_arguments(&raw_args)?;
                 let recomputed_digest = compute_challenge_digest(
                     &session_id,
                     &tool.name,
@@ -564,7 +566,7 @@ impl McpRouter {
         &self,
         approval_id: &str,
     ) -> Result<Option<PendingApprovalChallenge>, McpError> {
-        let key = format!("mcp:pending:{}", approval_id);
+        let key = format!("mcp:v2:pending:{}", approval_id);
         self.pending_store
             .get(&key)
             .await
@@ -578,7 +580,7 @@ impl McpRouter {
         approval_id: &str,
         human_identity: &Identity,
     ) -> Result<ApprovalResult, McpError> {
-        let key = format!("mcp:pending:{}", approval_id);
+        let key = format!("mcp:v2:pending:{}", approval_id);
         let challenge = self
             .pending_store
             .get(&key)
@@ -619,7 +621,7 @@ impl McpRouter {
             created_at: Utc::now().timestamp(),
         };
 
-        let exec_key = format!("mcp:exec:{}", execution_token);
+        let exec_key = format!("mcp:v2:exec:{}", execution_token);
         let ttl_secs = (challenge.expires_at - Utc::now().timestamp()).max(1) as u64;
         self.execution_store
             .set(&exec_key, record, Duration::from_secs(ttl_secs))
