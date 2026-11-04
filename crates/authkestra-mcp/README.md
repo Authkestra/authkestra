@@ -176,7 +176,14 @@ Execution tokens can only be presented once. The router calls `AtomicConsume::co
 
 To prevent autonomous agents from inspecting raw OAuth refresh tokens or master secrets in LLM prompt contexts, `authkestra-mcp` includes `EncryptedKvTokenVault`:
 - Tokens are encrypted at rest using **AES-256-GCM** (NIST SP 800-38D with 12-byte random nonces and 16-byte authentication tags) via `authkestra-crypto-util`.
-- Storage keys isolate tokens per tenant: `mcp:vault:{provider_id}:{external_id}:{service}`.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:e08e40e3bba02da1715ce1afeef8fa7cd7531b791c3d086f98da66c9a8719477 -->
+
+- Storage keys isolate tokens per identity and service using `mcp:vault-v2:` followed by each field's UTF-8 byte length, a colon, and the field. The encrypted record also binds the provider, external ID, and service.
+- Upgrading makes legacy `mcp:vault:` records unavailable: their keys are ambiguous and their contents do not identify the owner. Reconnect or store tokens again for verified identities. Retire old vault instances before relying on the new isolation, and remove legacy records through the storage backend or allow them to expire.
+
+<!-- /coderabbit-ai-generated:v1 -->
 - Tool handlers access tokens strictly through `ToolContext::get_downstream_token(service, scopes)`, ensuring zero-trust credential isolation.
 
 ---

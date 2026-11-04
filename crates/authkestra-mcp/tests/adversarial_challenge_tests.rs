@@ -856,14 +856,12 @@ async fn test_adversarial_cross_tenant_isolation_matrix() {
 }
 
 // =========================================================================
-// 7. DELIMITER INJECTION IN STORAGE KEY EMPIRICAL FINDING TEST
+// 7. DELIMITER INJECTION IN STORAGE KEYS
 // =========================================================================
 
 #[test]
 fn test_adversarial_delimiter_collision_in_storage_key() {
-    // Construct two distinct identities and service names that produce identical storage keys
-    // due to unescaped colon ':' delimiter concatenation in EncryptedKvTokenVault::storage_key:
-    // format!("mcp:vault:{}:{}:{}", identity.provider_id, identity.external_id, service)
+    // These tuples collided with the original colon-delimited storage keys.
 
     let identity_1 = Identity {
         provider_id: "corp".to_string(),
@@ -886,10 +884,9 @@ fn test_adversarial_delimiter_collision_in_storage_key() {
     let key_1 = EncryptedKvTokenVault::storage_key(&identity_1, service_1);
     let key_2 = EncryptedKvTokenVault::storage_key(&identity_2, service_2);
 
-    // Empirically demonstrate the collision:
-    assert_eq!(
+    assert_ne!(
         key_1, key_2,
-        "Storage keys collide due to unescaped ':' delimiters in vault storage_key!"
+        "distinct identity and service tuples must have distinct keys"
     );
 }
 
