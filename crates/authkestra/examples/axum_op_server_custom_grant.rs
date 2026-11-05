@@ -317,21 +317,25 @@ fn port_from_env() -> u16 {
         .unwrap_or(8080)
 }
 
-/// Resolves the token signing secret dynamically: checks `AUTHKESTRA_TOKEN_SECRET` or
-/// `JWT_SECRET` in the environment, falling back to a securely generated random 32-byte
-/// secret at startup so no static source literal can forge tokens (CWE-321).
-fn resolve_token_secret() -> Vec<u8> {
-    if let Ok(val) =
-        std::env::var("AUTHKESTRA_TOKEN_SECRET").or_else(|_| std::env::var("JWT_SECRET"))
-    {
-        let bytes = val.into_bytes();
-        if bytes.len() >= 32 {
-            tracing::info!("Using token signing secret from environment variable");
-            return bytes;
+/// Resolves the token signing secret dynamically: checks `AUTHKESTRA_TOKEN_SECRET` then
+/// `JWT_SECRET` for the first valid secret of at least 32 bytes, falling back to a securely
+/// generated random 32-byte secret at startup so no static source literal can forge tokens (CWE-321).
+pub fn resolve_token_secret() -> Vec<u8> {
+    for var_name in ["AUTHKESTRA_TOKEN_SECRET", "JWT_SECRET"] {
+        if let Ok(val) = std::env::var(var_name) {
+            let bytes = val.into_bytes();
+            if bytes.len() >= 32 {
+                tracing::info!(
+                    var = var_name,
+                    "Using token signing secret from environment variable"
+                );
+                return bytes;
+            }
+            tracing::warn!(
+                var = var_name,
+                "Configured token secret from environment is shorter than 32 bytes; checking fallback or ephemeral key"
+            );
         }
-        tracing::warn!(
-            "Configured token secret from environment is shorter than 32 bytes; falling back to ephemeral random key"
-        );
     }
     tracing::info!("Generating random 32-byte secret for example token signing");
     let mut key = vec![0u8; 32];
