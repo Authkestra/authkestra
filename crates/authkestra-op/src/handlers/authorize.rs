@@ -1205,6 +1205,8 @@ mod tests {
         }
     }
 
+    /// Verifies that an authorization request for a scope not listed in `config.scopes_supported`
+    /// is rejected with `invalid_scope`.
     #[tokio::test]
     async fn test_scope_not_supported_by_provider_is_rejected() {
         let clients = authkestra_engine::store::memory::MemoryStore::<

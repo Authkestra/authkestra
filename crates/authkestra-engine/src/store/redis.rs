@@ -403,6 +403,92 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> 
             Ok(None)
         }
     }
+
+    #[tracing::instrument(skip(self, value, predicate), fields(key = %key, index = %index))]
+    async fn update_indexed_if(
+        &self,
+        key: &str,
+        index: &str,
+        value: T,
+        ttl: Duration,
+        predicate: for<'a> fn(&'a T) -> bool,
+    ) -> Result<bool, StoreError> {
+        tracing::debug!("conditionally updating indexed record in redis store");
+        let mut conn = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Redis connection error");
+                StoreError::Internal(format!("Redis connection error: {e}"))
+            })?;
+
+        let new_json = serde_json::to_string(&value).map_err(|e| {
+            tracing::error!(error = %e, "Serialization error");
+            StoreError::Serialization(format!("Serialization error: {e}"))
+        })?;
+
+        let ttl_secs = ttl.as_secs().max(1);
+        let primary_redis_key = self.key(key);
+        let index_redis_key = self.index_key(index);
+
+        let script = redis::Script::new(
+            r#"
+            local current = redis.call('GET', KEYS[1])
+            if not current then
+                return -1
+            end
+            if current ~= ARGV[1] then
+                return 0
+            end
+            redis.call('SETEX', KEYS[1], tonumber(ARGV[3]), ARGV[2])
+            redis.call('SETEX', KEYS[2], tonumber(ARGV[3]), ARGV[4])
+            return 1
+            "#,
+        );
+
+        for _ in 0..4 {
+            let current_json: Option<String> = conn.get(&primary_redis_key).await.map_err(|e| {
+                tracing::error!(error = %e, "Redis get error in update_indexed_if");
+                StoreError::Internal(format!("Redis get error: {e}"))
+            })?;
+
+            let Some(current_json) = current_json else {
+                return Ok(false);
+            };
+
+            let current_val: T = serde_json::from_str(&current_json).map_err(|e| {
+                tracing::error!(error = %e, "Deserialization error in update_indexed_if");
+                StoreError::Serialization(format!("Deserialization error: {e}"))
+            })?;
+
+            if !predicate(&current_val) {
+                return Ok(false);
+            }
+
+            let status: i32 = script
+                .key(&primary_redis_key)
+                .key(&index_redis_key)
+                .arg(&current_json)
+                .arg(&new_json)
+                .arg(ttl_secs)
+                .arg(key)
+                .invoke_async(&mut conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Redis update_indexed_if script error");
+                    StoreError::Internal(format!("Redis update_indexed_if script error: {e}"))
+                })?;
+
+            match status {
+                1 => return Ok(true),
+                -1 => return Ok(false),
+                _ => continue,
+            }
+        }
+
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

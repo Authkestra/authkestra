@@ -294,6 +294,46 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
         Ok(())
     }
 
+    async fn update_indexed_if(
+        &self,
+        primary_key: &str,
+        secondary_key: &str,
+        value: T,
+        ttl: Duration,
+        predicate: for<'a> fn(&'a T) -> bool,
+    ) -> Result<bool, StoreError> {
+        tracing::debug!(
+            primary_key = %primary_key,
+            secondary_key = %secondary_key,
+            "conditionally updating indexed record in memory store"
+        );
+        let mut data = self.data.lock().unwrap();
+        let mut indices = self.indices.lock().unwrap();
+
+        let (expired, allowed) = match data.get(primary_key) {
+            Some(existing) if existing.is_expired() => (true, false),
+            Some(existing) => (false, predicate(&existing.value)),
+            None => (false, false),
+        };
+        if expired {
+            data.remove(primary_key);
+            indices.remove(secondary_key);
+            return Ok(false);
+        }
+        if !allowed {
+            return Ok(false);
+        }
+
+        let entry = StoreEntry {
+            value,
+            expires_at: Some(Instant::now() + ttl),
+        };
+        data.insert(primary_key.to_string(), entry);
+        indices.insert(secondary_key.to_string(), primary_key.to_string());
+
+        Ok(true)
+    }
+
     async fn get_by_index(&self, secondary_key: &str) -> Result<Option<T>, StoreError> {
         tracing::debug!(secondary_key = %secondary_key, "loading by index from memory store");
         let primary_key_opt = {

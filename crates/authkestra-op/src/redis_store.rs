@@ -132,16 +132,16 @@ mod tests {
             recorded,
             "Initial registration with fractional TTL must succeed"
         );
-        // Verify key exists in Redis with TTL >= 1s
+        // Verify key exists in Redis with PTTL > 1000ms (proving rounding up to 2s rather than truncating to 1s)
         let mut conn = store.conn.clone();
-        let ttl: i64 = redis::cmd("TTL")
+        let pttl: i64 = redis::cmd("PTTL")
             .arg(store.key("fractional-jti"))
             .query_async(&mut conn)
             .await
             .unwrap();
         assert!(
-            ttl >= 1,
-            "Replay marker TTL must round upward so it does not expire before expires_at"
+            pttl > 1000,
+            "Replay marker PTTL ({pttl}ms) must exceed 1000ms so a 1500ms window is rounded up to 2s"
         );
     }
 }

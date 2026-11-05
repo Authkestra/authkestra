@@ -913,18 +913,7 @@ async fn handle_device_code(
             })
         }
         DeviceCodeStatus::Denied | DeviceCodeStatus::Approved(_) => {
-            // Atomically consume to prevent race conditions
-            let consumed = match op_store.consume_device_code(device_code_str).await {
-                Ok(Some(s)) => s,
-                _ => {
-                    return Err(TokenErrorResponse {
-                        error: "invalid_grant".to_string(),
-                        error_description: "Device code is invalid or already consumed".to_string(),
-                    });
-                }
-            };
-
-            if let DeviceCodeStatus::Approved(identity) = consumed.status {
+            if matches!(session.status, DeviceCodeStatus::Approved(_)) {
                 for s in session.scope.split_whitespace() {
                     if !config.allows_scope(s) {
                         tracing::warn!(client_id = %client_id, scope = %s, "Device code carries scope not supported by provider");
@@ -947,7 +936,20 @@ async fn handle_device_code(
                         });
                     }
                 }
+            }
 
+            // Atomically consume to prevent race conditions
+            let consumed = match op_store.consume_device_code(device_code_str).await {
+                Ok(Some(s)) => s,
+                _ => {
+                    return Err(TokenErrorResponse {
+                        error: "invalid_grant".to_string(),
+                        error_description: "Device code is invalid or already consumed".to_string(),
+                    });
+                }
+            };
+
+            if let DeviceCodeStatus::Approved(identity) = consumed.status {
                 let expires_in = config.access_token_ttl_secs;
                 let scope_opt = if session.scope.is_empty() {
                     None
@@ -5346,6 +5348,8 @@ mod tests {
         assert!(claim.aud.unwrap().contains("https://auth.example.com"));
     }
 
+    /// Verifies that when `audience` is omitted in token exchange and defaults to `config.issuer`,
+    /// the default audience is still validated against `client.allowed_audiences`.
     #[tokio::test]
     async fn test_tx_default_audience_rejected_when_not_in_allowed_audiences() {
         let tokens = test_tokens();
@@ -5393,6 +5397,8 @@ mod tests {
         assert_eq!(err.error_description, "Requested audience is not allowed");
     }
 
+    /// Verifies that redeeming an authorization code carrying a scope not in `config.scopes_supported`
+    /// is rejected with `invalid_scope`.
     #[tokio::test]
     async fn test_token_code_rejected_when_scope_not_supported_by_provider() {
         let clients = authkestra_engine::store::memory::MemoryStore::<
@@ -5458,6 +5464,8 @@ mod tests {
         assert!(err.error_description.contains("unsupported_scope"));
     }
 
+    /// Verifies that `"openid"` and `"offline_access"` scope checks use exact token matching
+    /// rather than substring matching.
     #[tokio::test]
     async fn test_token_exact_scope_matching_for_openid_and_offline_access() {
         let clients = authkestra_engine::store::memory::MemoryStore::<

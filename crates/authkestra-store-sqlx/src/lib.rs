@@ -698,17 +698,19 @@ macro_rules! impl_opstore_sql {
             let query = format!(
                 "UPDATE {schema}oauth_device_codes 
                 SET status = {p1}, last_polled_at = {p2} 
-                WHERE device_code = {p3}",
+                WHERE device_code = {p3} AND status = {p4}",
                 schema = $schema_prefix,
-                p1 = $placeholder_fmt(1), p2 = $placeholder_fmt(2), p3 = $placeholder_fmt(3)
+                p1 = $placeholder_fmt(1), p2 = $placeholder_fmt(2), p3 = $placeholder_fmt(3), p4 = $placeholder_fmt(4)
             );
 
             let status_json = sqlx::types::Json(session.status);
+            let pending_json = sqlx::types::Json(authkestra_op::device::DeviceCodeStatus::Pending);
 
             let res = sqlx::query(&query)
                 .bind(status_json)
                 .bind(session.last_polled_at)
                 .bind(session.device_code)
+                .bind(pending_json)
                 .execute(&mut *conn)
                 .await
                 .map_err(|e| {
@@ -716,7 +718,7 @@ macro_rules! impl_opstore_sql {
                     authkestra_engine::store::StoreError::Internal(format!("db error: {e}"))
                 })?;
 
-            if res.rows_affected() == 0 {
+            if res.rows_affected() != 1 {
                 tracing::warn!("sqlx update_device_code affected 0 rows (record missing or modified)");
                 return Err(authkestra_engine::store::StoreError::NotFound);
             }

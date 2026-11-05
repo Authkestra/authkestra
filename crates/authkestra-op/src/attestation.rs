@@ -110,7 +110,8 @@ pub struct SecondFactorProof {
 #[async_trait]
 pub trait SecondFactorVerifier: Send + Sync {
     /// Returns `Ok(())` if `proof` is a valid second factor for `subject`
-    /// enrolling a principal of `principal_type` with authorized `attributes`. Any `Err` is surfaced to
+    /// enrolling a principal of `principal_type` with caller-requested `attributes`.
+    /// Implementations must authorize any attributes they accept. Any `Err` is surfaced to
     /// the caller as `OpError::SecondFactorFailed` — implementations should
     /// log their own specifics and not leak them into the OAuth-shaped
     /// error response.

@@ -2148,6 +2148,8 @@ mod leeway_tests {
         assert_eq!(manager().with_leeway(5).leeway(), 5);
     }
 
+    /// Verifies that `sanitize_identity_for_scopes` strips upstream provider credentials
+    /// while preserving safe custom claims.
     #[test]
     fn test_sanitize_identity_strips_sensitive_credentials() {
         let mut attributes = HashMap::new();
@@ -2183,6 +2185,7 @@ mod leeway_tests {
         assert!(!sanitized.attributes.contains_key("expires_at"));
     }
 
+    /// Verifies that `sanitize_identity_for_scopes` strips email fields unless the `"email"` scope is granted.
     #[test]
     fn test_sanitize_identity_gates_email_on_scope() {
         let mut attributes = HashMap::new();
@@ -2227,6 +2230,7 @@ mod leeway_tests {
         );
     }
 
+    /// Verifies that `sanitize_identity_for_scopes` strips profile fields unless the `"profile"` scope is granted.
     #[test]
     fn test_sanitize_identity_gates_profile_on_scope() {
         let mut attributes = HashMap::new();

@@ -210,33 +210,23 @@ where
     }
 
     async fn update_device_code(&mut self, session: DeviceCodeSession) -> Result<(), StoreError> {
-        let current = self.get_device_code(&session.device_code).await?;
-        match current {
-            Some(existing) if matches!(existing.status, DeviceCodeStatus::Pending) => {
-                let ttl = device_code_ttl(session.expires_at);
-                self.set_indexed(
-                    &session.device_code.clone(),
-                    &session.user_code.clone(),
-                    session,
-                    ttl,
-                )
-                .await
-            }
-            Some(_) => {
-                tracing::warn!(
-                    device_code = %session.device_code,
-                    "update_device_code rejected: session is no longer in Pending state"
-                );
-                Err(StoreError::NotFound)
-            }
-            None => {
-                tracing::warn!(
-                    device_code = %session.device_code,
-                    "update_device_code rejected: session not found"
-                );
-                Err(StoreError::NotFound)
-            }
+        let ttl = device_code_ttl(session.expires_at);
+        let device_code = session.device_code.clone();
+        let user_code = session.user_code.clone();
+        let updated = self
+            .update_indexed_if(&device_code, &user_code, session, ttl, |existing| {
+                matches!(existing.status, DeviceCodeStatus::Pending)
+            })
+            .await?;
+
+        if !updated {
+            tracing::warn!(
+                device_code = %device_code,
+                "update_device_code rejected: session missing or no longer in Pending state"
+            );
+            return Err(StoreError::NotFound);
         }
+        Ok(())
     }
 
     async fn delete_device_code(&mut self, device_code: &str) -> Result<(), StoreError> {

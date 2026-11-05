@@ -122,7 +122,7 @@ pub fn ttl_ceil_secs(ttl: Duration) -> u64 {
 /// Backends that can atomically write a value under a primary key while
 /// also maintaining a secondary lookup key implement this.
 #[async_trait]
-pub trait IndexedKvStore<T>: KvStore<T> {
+pub trait IndexedKvStore<T: Send + 'static>: KvStore<T> {
     async fn set_indexed(
         &self,
         primary_key: &str,
@@ -131,6 +131,27 @@ pub trait IndexedKvStore<T>: KvStore<T> {
         ttl: Duration,
     ) -> Result<(), StoreError>;
     async fn get_by_index(&self, secondary_key: &str) -> Result<Option<T>, StoreError>;
+
+    /// Atomically replaces the value stored under `primary_key` (and updates
+    /// `secondary_key`) only if a non-expired entry currently exists under
+    /// `primary_key` and satisfies `predicate`.
+    ///
+    /// Returns `Ok(true)` if the entry existed, satisfied `predicate`, and was
+    /// updated, or `Ok(false)` if the entry was missing, expired, or did not
+    /// satisfy `predicate`.
+    async fn update_indexed_if(
+        &self,
+        primary_key: &str,
+        secondary_key: &str,
+        value: T,
+        ttl: Duration,
+        predicate: for<'a> fn(&'a T) -> bool,
+    ) -> Result<bool, StoreError> {
+        let _ = (primary_key, secondary_key, value, ttl, predicate);
+        Err(StoreError::Internal(
+            "update_indexed_if not supported by this store".to_string(),
+        ))
+    }
 }
 
 #[cfg(feature = "memory")]

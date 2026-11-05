@@ -43,9 +43,15 @@ pub async fn handle_device_verify(
         session.status = DeviceCodeStatus::Denied;
     }
 
-    devices.update_device_code(session).await.map_err(|e| {
-        tracing::warn!(error = %e, "Failed to update device code: record missing or no longer pending");
-        OpError::InvalidCode
+    devices.update_device_code(session).await.map_err(|e| match e {
+        authkestra_engine::store::StoreError::NotFound => {
+            tracing::warn!(error = %e, "Failed to update device code: record missing or no longer pending");
+            OpError::InvalidCode
+        }
+        other => {
+            tracing::error!(error = %other, "Storage failure while updating device code");
+            OpError::Storage
+        }
     })?;
 
     Ok(DeviceVerifyResponse { success: true })
@@ -106,6 +112,7 @@ mod tests {
         assert!(matches!(err, OpError::InvalidCode));
     }
 
+    /// Verifies that `update_device_code` rejects missing or non-pending sessions.
     #[tokio::test]
     async fn test_update_device_code_rejects_non_pending() {
         let mut devices = authkestra_engine::store::memory::MemoryStore::<

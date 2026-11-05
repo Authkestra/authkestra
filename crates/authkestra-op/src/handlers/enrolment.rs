@@ -1406,6 +1406,8 @@ mod tests {
         }
     }
 
+    /// Verifies that `SecondFactorVerifier::verify` receives caller-requested attributes
+    /// and can reject unauthorized attribute values.
     #[tokio::test]
     async fn test_second_factor_validates_attributes() {
         let config = test_config();

@@ -304,3 +304,68 @@ async fn test_device_concurrency() {
         "All other requests should fail with invalid_grant"
     );
 }
+
+/// Verifies that an invalid scope on an approved device code returns `invalid_scope`
+/// before consuming the device code, leaving it redeemable once the scope is allowed.
+#[tokio::test]
+async fn test_device_flow_invalid_scope_does_not_consume_code() {
+    let mut devices =
+        authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new();
+    let session = DeviceCodeSession::new(
+        "dev_scope_1".to_string(),
+        "USRSCP".to_string(),
+        "client1".to_string(),
+        "openid admin".to_string(),
+        Utc::now() + Duration::seconds(600),
+        DeviceCodeStatus::Approved(test_identity()),
+    );
+    devices.store_device_code(session).await.unwrap();
+
+    let clients =
+        authkestra_engine::store::memory::MemoryStore::<crate::client::ClientRegistration>::new();
+    clients
+        .set(
+            "client1",
+            ClientRegistration {
+                client_id: "client1".to_string(),
+                client_secret_hash: None,
+                redirect_uris: vec![],
+                grant_types: vec![GrantType::DeviceCode],
+                scopes: vec!["openid".to_string()], // "admin" not yet allowed
+                require_pkce: false,
+                allowed_audiences: vec![],
+                token_endpoint_auth_method: None,
+                jwks: None,
+            },
+            std::time::Duration::from_secs(31536000),
+        )
+        .await
+        .unwrap();
+
+    let mut config = test_config(false);
+    config.scopes_supported = vec!["openid".to_string(), "admin".to_string()];
+    let tokens = test_tokens();
+
+    let err = handle_token(
+        default_device_req("dev_scope_1"),
+        None,
+        &config,
+        &mut crate::store::CompositeOpStore::new(
+            clients.clone(),
+            authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new(),
+            authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+            devices.clone(),
+        ),
+        &tokens,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.error, "invalid_scope");
+
+    // Device code must still be present in store (not consumed)
+    assert!(devices
+        .get_device_code("dev_scope_1")
+        .await
+        .unwrap()
+        .is_some());
+}
