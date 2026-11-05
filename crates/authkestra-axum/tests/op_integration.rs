@@ -529,6 +529,7 @@ async fn device_verify_with_a_session_records_the_users_approval() {
     assert_eq!(body_json(resp).await["success"], true);
 }
 
+/// Cross-site `/device/verify` requests with `Sec-Fetch-Site: cross-site` are rejected.
 #[tokio::test]
 async fn device_verify_rejects_cross_site_fetch_metadata() {
     let resp = build_app(true)
@@ -547,6 +548,7 @@ async fn device_verify_rejects_cross_site_fetch_metadata() {
     assert_eq!(body_json(resp).await["error"], "access_denied");
 }
 
+/// `/device/verify` requests whose `Origin` header mismatches the configured issuer origin are rejected.
 #[tokio::test]
 async fn device_verify_rejects_origin_mismatch() {
     let resp = build_app(true)
@@ -565,6 +567,7 @@ async fn device_verify_rejects_origin_mismatch() {
     assert_eq!(body_json(resp).await["error"], "access_denied");
 }
 
+/// `/device/verify` requests with a matching `Origin` header succeed.
 #[tokio::test]
 async fn device_verify_accepts_matching_origin() {
     let resp = build_app(true)
@@ -583,6 +586,7 @@ async fn device_verify_accepts_matching_origin() {
     assert_eq!(body_json(resp).await["success"], true);
 }
 
+/// `/device/verify` requests supplying an invalid `csrf_token` are rejected.
 #[tokio::test]
 async fn device_verify_rejects_invalid_csrf_token() {
     let resp = build_app(true)
@@ -602,6 +606,7 @@ async fn device_verify_rejects_invalid_csrf_token() {
     assert_eq!(body_json(resp).await["error"], "access_denied");
 }
 
+/// `/device/verify` requests supplying a valid session-bound `csrf_token` succeed.
 #[tokio::test]
 async fn device_verify_accepts_valid_csrf_token() {
     let key = [99u8; 32];

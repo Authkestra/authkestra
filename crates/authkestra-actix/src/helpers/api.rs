@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 use actix_web::{cookie::Cookie, http::header, web, HttpRequest, HttpResponse};
-pub use authkestra_engine::auth::{is_safe_relative_url, Session, SessionConfig, SessionStore};
+pub use authkestra_engine::auth::{
+    is_safe_relative_url, resolve_redirect_target, Session, SessionConfig, SessionStore,
+};
 use authkestra_engine::auth::{Identity, OAuthToken};
 use authkestra_engine::pkce::Pkce;
 use authkestra_engine::{state::OAuth2State, Engine, ErasedOAuthFlow, OAuth2Flow};
@@ -89,6 +91,8 @@ where
 {
     initiate_oauth_login_erased(flow, scopes, config, success_url)
 }
+
+/// Type-erased helper to initiate the OAuth2 login flow and set a CSRF state cookie.
 pub fn initiate_oauth_login_erased(
     flow: &dyn ErasedOAuthFlow,
     scopes: &[&str],
@@ -102,7 +106,10 @@ pub fn initiate_oauth_login_erased(
     let safe_success_url = match success_url {
         Some(ref u) if is_safe_relative_url(u) => success_url,
         Some(invalid) => {
-            tracing::warn!(%invalid, "unsafe or invalid success_url provided in login request; ignoring");
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe or invalid success_url provided in login request; ignoring"
+            );
             None
         }
         None => None,
@@ -225,6 +232,7 @@ async fn finalize_callback_erased(
     Ok((identity, token, expected_state))
 }
 
+/// Type-erased helper to handle the OAuth2 callback and create a server-side session.
 #[cfg(feature = "session")]
 pub async fn handle_oauth_callback_erased(
     req: HttpRequest,
@@ -232,7 +240,7 @@ pub async fn handle_oauth_callback_erased(
     params: OAuthCallbackParams,
     store: Arc<dyn SessionStore>,
     config: SessionConfig,
-    _success_url: &str,
+    success_url: &str,
 ) -> Result<HttpResponse, actix_web::Error> {
     let (mut identity, token, expected_state) =
         finalize_callback_erased(&req, flow, &params, &config).await?;
@@ -276,24 +284,16 @@ pub async fn handle_oauth_callback_erased(
         .max_age(actix_web::cookie::time::Duration::ZERO)
         .finish();
 
-    let final_success_url = match expected_state.success_url {
-        Some(ref u) if is_safe_relative_url(u) => u.clone(),
-        Some(ref invalid) => {
-            tracing::warn!(%invalid, "unsafe success_url found in OAuth state during callback redirect; falling back to default");
-            if is_safe_relative_url(_success_url) && !_success_url.is_empty() {
-                _success_url.to_string()
-            } else {
-                "/".to_string()
-            }
+    if let Some(ref invalid) = expected_state.success_url {
+        if !is_safe_relative_url(invalid) {
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe success_url found in OAuth state during callback redirect; falling back to default"
+            );
         }
-        None => {
-            if is_safe_relative_url(_success_url) && !_success_url.is_empty() {
-                _success_url.to_string()
-            } else {
-                "/".to_string()
-            }
-        }
-    };
+    }
+    let final_success_url =
+        resolve_redirect_target(expected_state.success_url.as_deref(), success_url);
 
     Ok(HttpResponse::SeeOther()
         .insert_header((header::LOCATION, final_success_url))

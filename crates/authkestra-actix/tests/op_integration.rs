@@ -498,6 +498,7 @@ async fn discovery_and_jwks_need_no_session() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// Cross-site `/device/verify` requests with `Sec-Fetch-Site: cross-site` are rejected.
 #[actix_web::test]
 async fn device_verify_rejects_cross_site_fetch_metadata_actix() {
     let app = op_app!(true);
@@ -515,6 +516,7 @@ async fn device_verify_rejects_cross_site_fetch_metadata_actix() {
     assert_eq!(body["error"], "access_denied");
 }
 
+/// `/device/verify` requests whose `Origin` header mismatches the configured issuer origin are rejected.
 #[actix_web::test]
 async fn device_verify_rejects_origin_mismatch_actix() {
     let app = op_app!(true);
@@ -532,6 +534,7 @@ async fn device_verify_rejects_origin_mismatch_actix() {
     assert_eq!(body["error"], "access_denied");
 }
 
+/// `/device/verify` requests with a matching `Origin` header succeed.
 #[actix_web::test]
 async fn device_verify_accepts_matching_origin_actix() {
     let app = op_app!(true);
@@ -549,6 +552,7 @@ async fn device_verify_accepts_matching_origin_actix() {
     assert_eq!(body["success"], true);
 }
 
+/// `/device/verify` requests supplying an invalid `csrf_token` are rejected.
 #[actix_web::test]
 async fn device_verify_rejects_invalid_csrf_token_actix() {
     let app = op_app!(true);
@@ -569,6 +573,7 @@ async fn device_verify_rejects_invalid_csrf_token_actix() {
     assert_eq!(body["error"], "access_denied");
 }
 
+/// `/device/verify` requests supplying a valid session-bound `csrf_token` succeed.
 #[actix_web::test]
 async fn device_verify_accepts_valid_csrf_token_actix() {
     let key = [99u8; 32];

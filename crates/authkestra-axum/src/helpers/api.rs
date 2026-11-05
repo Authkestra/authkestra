@@ -1,5 +1,7 @@
 #![allow(unused_imports)]
-pub use authkestra_engine::auth::{is_safe_relative_url, Session, SessionConfig, SessionStore};
+pub use authkestra_engine::auth::{
+    is_safe_relative_url, resolve_redirect_target, Session, SessionConfig, SessionStore,
+};
 #[cfg(feature = "token")]
 use authkestra_engine::TokenManager;
 use authkestra_engine::{
@@ -59,7 +61,10 @@ pub fn initiate_oauth_login(
     let safe_success_url = match success_url {
         Some(ref u) if is_safe_relative_url(u) => success_url,
         Some(invalid) => {
-            tracing::warn!(%invalid, "unsafe or invalid success_url provided in login request; ignoring");
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe or invalid success_url provided in login request; ignoring"
+            );
             None
         }
         None => None,
@@ -166,7 +171,7 @@ pub async fn handle_oauth_callback_erased(
     params: OAuthCallbackParams,
     store: Arc<dyn SessionStore>,
     config: SessionConfig,
-    _success_url: &str,
+    success_url: &str,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let (mut identity, token, auth_state) =
         finalize_callback_erased(flow, &cookies, &params, &config).await?;
@@ -208,24 +213,15 @@ pub async fn handle_oauth_callback_erased(
     let cookie = create_axum_cookie(&config, session.id);
     cookies.add(cookie);
 
-    let redirect_url = match auth_state.success_url {
-        Some(ref u) if is_safe_relative_url(u) => u.clone(),
-        Some(ref invalid) => {
-            tracing::warn!(%invalid, "unsafe success_url found in OAuth state during callback redirect; falling back to default");
-            if is_safe_relative_url(_success_url) && !_success_url.is_empty() {
-                _success_url.to_string()
-            } else {
-                "/".to_string()
-            }
+    if let Some(ref invalid) = auth_state.success_url {
+        if !is_safe_relative_url(invalid) {
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe success_url found in OAuth state during callback redirect; falling back to default"
+            );
         }
-        None => {
-            if is_safe_relative_url(_success_url) && !_success_url.is_empty() {
-                _success_url.to_string()
-            } else {
-                "/".to_string()
-            }
-        }
-    };
+    }
+    let redirect_url = resolve_redirect_target(auth_state.success_url.as_deref(), success_url);
     Ok(Redirect::to(&redirect_url).into_response())
 }
 
@@ -608,8 +604,9 @@ impl IntoResponse for AxumError {
     }
 }
 
+/// Extracts and validates the current user session from request cookies.
 #[cfg(feature = "session")]
-#[tracing::instrument(skip(store, cookies))]
+#[tracing::instrument(skip(store, config, cookies))]
 pub async fn get_session(
     store: &Arc<dyn SessionStore>,
     config: &SessionConfig,

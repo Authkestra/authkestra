@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for session cookies.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SessionConfig {
     /// The name of the session cookie.
     pub cookie_name: String,
@@ -24,6 +24,20 @@ pub struct SessionConfig {
     pub state_encryption_key: [u8; 32],
 }
 
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("cookie_name", &self.cookie_name)
+            .field("secure", &self.secure)
+            .field("http_only", &self.http_only)
+            .field("same_site", &self.same_site)
+            .field("path", &self.path)
+            .field("max_age", &self.max_age)
+            .field("state_encryption_key", &"<redacted>")
+            .finish()
+    }
+}
+
 impl SessionConfig {
     /// Creates a new SessionConfig with an explicit 32-byte encryption key.
     pub fn new(state_encryption_key: [u8; 32]) -> Self {
@@ -39,7 +53,14 @@ impl SessionConfig {
     }
 }
 
+/// Returns a config with a freshly generated random 32-byte `state_encryption_key`.
+///
+/// Each call generates a different key. Create the config once and share it.
+/// Use [`SessionConfig::new`] with an explicit key when several instances must
+/// decrypt each other's OAuth state cookies, or when in-flight logins must
+/// survive a restart.
 impl Default for SessionConfig {
+    /// Generates a default [`SessionConfig`] with a random 32-byte `state_encryption_key`.
     fn default() -> Self {
         use rand::RngCore;
         let mut key = [0u8; 32];
@@ -58,6 +79,16 @@ pub fn is_safe_relative_url(url: &str) -> bool {
         && !url.starts_with("/\\")
         && !url.contains('\\')
         && !url.chars().any(|c| c.is_control())
+}
+
+/// Returns the first safe relative URL among `stored` and `default`, or `"/"`.
+pub fn resolve_redirect_target(stored: Option<&str>, default: &str) -> String {
+    [stored, Some(default)]
+        .into_iter()
+        .flatten()
+        .find(|u| is_safe_relative_url(u))
+        .unwrap_or("/")
+        .to_string()
 }
 
 /// Represents an active user session.
@@ -134,14 +165,18 @@ mod tests {
     use chrono::{Duration, Utc};
     use std::collections::HashMap;
 
+    /// Verifies that `SessionConfig::default` generates distinct random keys and redacts Debug output.
     #[test]
     fn test_session_config_default_generates_random_keys() {
         let c1 = SessionConfig::default();
         let c2 = SessionConfig::default();
         assert_ne!(c1.state_encryption_key, c2.state_encryption_key);
         assert_ne!(c1.state_encryption_key, [0u8; 32]);
+        let dbg = format!("{c1:?}");
+        assert!(dbg.contains("<redacted>"));
     }
 
+    /// Verifies that `SessionConfig::new` preserves an explicit key.
     #[test]
     fn test_session_config_new_preserves_explicit_key() {
         let key = [42u8; 32];
@@ -149,6 +184,7 @@ mod tests {
         assert_eq!(cfg.state_encryption_key, key);
     }
 
+    /// Verifies relative URL validation and `resolve_redirect_target` fallback rules.
     #[test]
     fn test_is_safe_relative_url() {
         assert!(is_safe_relative_url("/"));
@@ -167,8 +203,21 @@ mod tests {
         assert!(!is_safe_relative_url("javascript:alert(1)"));
         assert!(!is_safe_relative_url("/path\r\nLocation: attacker.com"));
         assert!(!is_safe_relative_url("/path\x00null"));
+
+        assert_eq!(
+            resolve_redirect_target(Some("/profile"), "/default"),
+            "/profile"
+        );
+        assert_eq!(
+            resolve_redirect_target(Some("https://evil.com"), "/default"),
+            "/default"
+        );
+        assert_eq!(resolve_redirect_target(Some("https://evil.com"), ""), "/");
+        assert_eq!(resolve_redirect_target(None, "/home"), "/home");
+        assert_eq!(resolve_redirect_target(None, ""), "/");
     }
 
+    /// Verifies that expired sessions in `KvStore` blanket `SessionStore` impl are rejected and removed.
     #[tokio::test]
     async fn test_kv_store_session_store_expired_session_is_rejected_and_deleted() {
         let store = MemoryStore::<Session>::new();

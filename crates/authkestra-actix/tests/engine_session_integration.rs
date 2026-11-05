@@ -780,6 +780,7 @@ async fn a_store_that_cannot_delete_fails_the_logout_and_says_why() {
     );
 }
 
+/// Expired sessions are rejected with 401 and removed from the session store by the Actix extractor.
 #[actix_web::test]
 async fn expired_session_in_actix_extractor_is_rejected_and_cleaned_up() {
     let session_store = std::sync::Arc::new(TestSessionStore::default());
@@ -833,6 +834,7 @@ async fn expired_session_in_actix_extractor_is_rejected_and_cleaned_up() {
         .is_none());
 }
 
+/// Unsafe `success_url` query values are ignored during login and fall back to `/` on callback.
 #[actix_web::test]
 async fn unsafe_success_url_is_sanitized_to_default_redirect_actix() {
     let engine = build_engine();
@@ -879,6 +881,7 @@ async fn unsafe_success_url_is_sanitized_to_default_redirect_actix() {
     assert_eq!(location, "/");
 }
 
+/// Safe relative `success_url` query values are preserved and redirected to on callback.
 #[actix_web::test]
 async fn safe_success_url_is_preserved_on_callback_actix() {
     let engine = build_engine();
@@ -925,6 +928,7 @@ async fn safe_success_url_is_preserved_on_callback_actix() {
     assert_eq!(location, "/dashboard/home");
 }
 
+/// Cross-site logout requests carrying `Sec-Fetch-Site: cross-site` are rejected with 401.
 #[actix_web::test]
 async fn logout_rejects_cross_site_fetch_metadata_actix() {
     let engine = build_engine();
@@ -960,6 +964,7 @@ async fn logout_rejects_cross_site_fetch_metadata_actix() {
     assert_eq!(resp_post.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// Same-origin POST requests to `/auth/logout` delete the session and redirect.
 #[actix_web::test]
 async fn logout_via_post_succeeds_for_same_origin_actix() {
     let session_store = std::sync::Arc::new(TestSessionStore::default());

@@ -20,13 +20,41 @@ pub struct DeviceVerifyRequest {
     pub csrf_token: Option<String>,
 }
 
-/// Generates a session-bound CSRF token for device verification.
+/// Computes RFC 2104 HMAC-SHA256 over the given message parts.
+fn hmac_sha256(secret: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    const BLOCK_SIZE: usize = 64;
+    let mut key_block = [0u8; BLOCK_SIZE];
+    if secret.len() > BLOCK_SIZE {
+        let hashed = Sha256::digest(secret);
+        key_block[..32].copy_from_slice(&hashed);
+    } else {
+        key_block[..secret.len()].copy_from_slice(secret);
+    }
+
+    let mut ipad = [0x36u8; BLOCK_SIZE];
+    let mut opad = [0x5cu8; BLOCK_SIZE];
+    for i in 0..BLOCK_SIZE {
+        ipad[i] ^= key_block[i];
+        opad[i] ^= key_block[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    for part in parts {
+        inner.update(part);
+    }
+    let inner_digest = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_digest);
+    outer.finalize().into()
+}
+
+/// Generates a session-bound HMAC-SHA256 CSRF token for device verification.
 pub fn generate_csrf_token(secret: &[u8], session_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(secret);
-    hasher.update(b":device_verify_csrf:");
-    hasher.update(session_id.as_bytes());
-    URL_SAFE_NO_PAD.encode(hasher.finalize())
+    let mac = hmac_sha256(secret, &[b":device_verify_csrf:", session_id.as_bytes()]);
+    URL_SAFE_NO_PAD.encode(mac)
 }
 
 /// Verifies a session-bound CSRF token in constant-time.
@@ -149,6 +177,17 @@ mod tests {
             session_id,
             "invalid_tampered_token"
         ));
+    }
+
+    #[test]
+    fn test_csrf_token_matches_independent_hmac_sha256_vector() {
+        // Independently computed HMAC-SHA256(key = b"0123456789abcdef0123456789abcdef",
+        // msg = b":device_verify_csrf:sess-123") encoded with base64url (no padding).
+        let secret = b"0123456789abcdef0123456789abcdef";
+        let session_id = "sess-123";
+        let expected = "1ytV69E_pRrfmT0DREnh80xPd4GGsdkhCBS9SrjwiHg";
+        assert_eq!(generate_csrf_token(secret, session_id), expected);
+        assert!(verify_csrf_token(secret, session_id, expected));
     }
 
     #[tokio::test]
