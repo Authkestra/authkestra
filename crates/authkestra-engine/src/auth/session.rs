@@ -83,12 +83,14 @@ pub fn is_safe_relative_url(url: &str) -> bool {
 
 /// Returns the first safe relative URL among `stored` and `default`, or `"/"`.
 pub fn resolve_redirect_target(stored: Option<&str>, default: &str) -> String {
-    [stored, Some(default)]
-        .into_iter()
-        .flatten()
-        .find(|u| is_safe_relative_url(u))
-        .unwrap_or("/")
-        .to_string()
+    if let Some(url) = stored.filter(|u| is_safe_relative_url(u)) {
+        return url.to_string();
+    }
+    if is_safe_relative_url(default) {
+        return default.to_string();
+    }
+    tracing::debug!("redirect default rejected; falling back to '/'");
+    "/".to_string()
 }
 
 /// Represents an active user session.
