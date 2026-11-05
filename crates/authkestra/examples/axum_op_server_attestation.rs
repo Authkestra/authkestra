@@ -47,7 +47,8 @@ use rand_core::OsRng;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// A stand-in second factor for this example: accepts one fixed demo OTP.
+/// A stand-in second factor for this example: validates the claimed subject identity,
+/// principal type, and accepts one fixed demo OTP for the authorized demonstration.
 /// A real deployment implements `SecondFactorVerifier` against an SMS/TOTP
 /// provider for devices, or an out-of-band admin-approval queue / one-time
 /// bootstrap secret for services — see that trait's doc comment in
@@ -58,13 +59,27 @@ struct DemoOtpVerifier;
 impl SecondFactorVerifier for DemoOtpVerifier {
     async fn verify(
         &self,
-        _subject: &str,
-        _principal_type: PrincipalType,
+        subject: &str,
+        principal_type: PrincipalType,
         proof: &SecondFactorProof,
     ) -> Result<(), OpError> {
+        // Enforce expected demo subject and principal type to prevent unauthorized
+        // key enrollment under arbitrary identities (CWE-287 / Rows 1, 14).
+        if subject.trim().is_empty() || subject != "user-42" {
+            tracing::warn!(subject = %subject, "DemoOtpVerifier rejected unauthorized or empty subject");
+            return Err(OpError::SecondFactorFailed);
+        }
+
+        if principal_type != PrincipalType::Device {
+            tracing::warn!(principal_type = ?principal_type, "DemoOtpVerifier rejected unauthorized principal type");
+            return Err(OpError::SecondFactorFailed);
+        }
+
         if proof.kind == "demo_otp" && proof.value == "123456" {
+            tracing::debug!(subject = %subject, principal_type = ?principal_type, "DemoOtpVerifier verified second factor successfully");
             Ok(())
         } else {
+            tracing::warn!("DemoOtpVerifier rejected invalid second-factor proof");
             Err(OpError::SecondFactorFailed)
         }
     }
@@ -77,12 +92,13 @@ async fn main() {
     let issuer = "https://op.example.test".to_string();
     // The token manager's `iss` claim must equal `OpConfig::issuer` below, or relying parties
     // reject the tokens this OP mints.
+    let token_secret = resolve_token_secret();
     let engine = Authkestra::builder()
         .session_store(Arc::new(MemoryStore::<
             authkestra_engine::auth::session::Session,
         >::new()))
         .token_manager(Arc::new(authkestra::core::TokenManager::new(
-            b"example-only-32-byte-secret-key",
+            &token_secret,
             Some(issuer.clone()),
         )))
         .build();
@@ -291,4 +307,27 @@ fn port_from_env() -> u16 {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8092)
+}
+
+/// Resolves the token signing secret dynamically: checks `AUTHKESTRA_TOKEN_SECRET` or
+/// `JWT_SECRET` in the environment, falling back to a securely generated random 32-byte
+/// secret at startup so no static source literal can forge tokens (CWE-321).
+fn resolve_token_secret() -> Vec<u8> {
+    if let Ok(val) =
+        std::env::var("AUTHKESTRA_TOKEN_SECRET").or_else(|_| std::env::var("JWT_SECRET"))
+    {
+        let bytes = val.into_bytes();
+        if bytes.len() >= 32 {
+            tracing::info!("Using token signing secret from environment variable");
+            return bytes;
+        }
+        tracing::warn!(
+            "Configured token secret from environment is shorter than 32 bytes; falling back to ephemeral random key"
+        );
+    }
+    tracing::info!("Generating random 32-byte secret for example token signing");
+    let mut key = vec![0u8; 32];
+    use rand::RngCore;
+    rand::thread_rng().fill_bytes(&mut key);
+    key
 }
