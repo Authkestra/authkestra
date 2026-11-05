@@ -80,7 +80,10 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
     #[tracing::instrument(skip(self, key))]
     async fn get(&self, key: &str) -> Result<Option<T>, StoreError> {
         tracing::debug!("loading from memory store");
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
 
         if let Some(entry) = data.get(key) {
             if entry.is_expired() {
@@ -99,14 +102,20 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
             value,
             expires_at: Some(Instant::now() + ttl),
         };
-        self.data.lock().unwrap().insert(key.to_string(), entry);
+        self.data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?
+            .insert(key.to_string(), entry);
         Ok(())
     }
 
     #[tracing::instrument(skip(self, key))]
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
         tracing::debug!("deleting from memory store");
-        self.data.lock().unwrap().remove(key);
+        self.data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?
+            .remove(key);
         Ok(())
     }
 }
@@ -116,7 +125,10 @@ impl<T: Clone + serde::Serialize + Send + Sync + 'static> AtomicConsume<T> for M
     /// Atomically fetches and removes the value stored under `key`.
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError> {
         tracing::debug!("atomically consuming from memory store");
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         if let Some(entry) = data.remove(key) {
             if entry.is_expired() {
                 return Ok(None);
@@ -131,7 +143,10 @@ impl<T: Clone + serde::Serialize + Send + Sync + 'static> AtomicConsume<T> for M
         tracing::debug!(key = %key, "atomically deleting if equal from memory store");
         let expected_val =
             serde_json::to_value(expected).map_err(|e| StoreError::Serialization(e.to_string()))?;
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         if let Some(entry) = data.get(key) {
             if entry.is_expired() {
                 data.remove(key);
@@ -209,7 +224,10 @@ impl<T: Clone + Send + Sync + 'static> AtomicInsert<T> for MemoryStore<T> {
         // Held for the whole check-then-insert: this single lock is what
         // makes the operation atomic, exactly like `consume`'s single
         // `remove` call above.
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         let mut expiry_queue = self.insert_only_expiry_queue.lock().unwrap();
 
         // `get`/`consume` each self-heal by removing an expired entry the
@@ -307,7 +325,10 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             value,
             expires_at: Some(Instant::now() + ttl),
         };
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         let mut indices = self.indices.lock().unwrap();
 
         data.insert(primary_key.to_string(), entry);
@@ -324,7 +345,10 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
         };
 
         if let Some(primary_key) = primary_key_opt {
-            let mut data = self.data.lock().unwrap();
+            let mut data = self
+                .data
+                .lock()
+                .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
             if let Some(entry) = data.get(&primary_key) {
                 if entry.is_expired() {
                     data.remove(&primary_key);

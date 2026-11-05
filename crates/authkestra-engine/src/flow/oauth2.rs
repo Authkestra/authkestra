@@ -127,8 +127,8 @@ impl<P: OAuthProvider, M: UserMapper> OAuth2Flow<P, M> {
     /// # PKCE Contract
     ///
     /// When PKCE is enabled (`self.pkce_enabled()`):
-    /// - If `pkce_challenge` is `None`, a fresh PKCE challenge and matching `code_verifier`
-    ///   are generated automatically and stored in the returned [`OAuth2State`].
+    /// - If `pkce_challenge` is `None`, a fresh PKCE challenge is sent to the provider and
+    ///   the matching `code_verifier` is stored in the returned [`OAuth2State`].
     /// - If `pkce_challenge` is `Some`, the supplied challenge is sent to the provider and
     ///   `OAuth2State.code_verifier` is returned as `None`; the caller must populate
     ///   `OAuth2State.code_verifier` with the matching verifier before calling [`Self::finalize_login`].

@@ -6,10 +6,16 @@ use totp_rs::{Algorithm, TOTP};
 
 /// Extracts the non-empty credential identifier (`credential_id` or fallback `id`) from a TOTP credential object.
 fn extract_totp_credential_id(cred: &serde_json::Value) -> Option<&str> {
-    cred.get("credential_id")
-        .or_else(|| cred.get("id"))
-        .and_then(|v| v.as_str())
-        .filter(|id| !id.trim().is_empty())
+    for key in ["credential_id", "id"] {
+        if let Some(id) = cred
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.trim().is_empty())
+        {
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// TOTP authentication method.
@@ -127,7 +133,7 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
                 "Cannot rotate TOTP: existing credentials carry no credential_id and cannot be safely retired".into(),
             ));
         }
-        if has_legacy_raw_string {
+        if has_legacy_raw_string && !replacing && stale_ids.is_empty() {
             tracing::info!(
                 user_id = %user_id,
                 "Retiring legacy raw-string TOTP credentials via delete_credentials before re-enrollment"
@@ -249,12 +255,7 @@ impl<S: CredentialStore + 'static> AuthMethod for TotpAuthMethod<S> {
 
     async fn has_enrolled(&self, user_id: &str) -> Result<bool, AuthError> {
         let creds = self.store.get_credentials(user_id, "totp").await?;
-        Ok(creds.iter().any(|c| {
-            extract_totp_credential_id(c).is_some()
-                && c.get("secret")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.is_empty())
-        }))
+        Ok(!creds.is_empty())
     }
 
     async fn authenticate(&self, input: AuthInput) -> Result<Identity, AuthError> {
@@ -1232,5 +1233,60 @@ mod tests {
             }
             other => panic!("expected AuthError::Internal, got {:?}", other),
         }
+    }
+
+    /// Verifies that extract_totp_credential_id falls back to "id" if "credential_id" is null or empty.
+    #[test]
+    fn test_extract_totp_credential_id_fallback_when_credential_id_is_empty_or_null() {
+        let cred_null = serde_json::json!({
+            "credential_id": null,
+            "id": "valid-id-1",
+            "secret": "JBSWY3DPEHPK3PXP"
+        });
+        assert_eq!(extract_totp_credential_id(&cred_null), Some("valid-id-1"));
+
+        let cred_empty = serde_json::json!({
+            "credential_id": "",
+            "id": "valid-id-2",
+            "secret": "JBSWY3DPEHPK3PXP"
+        });
+        assert_eq!(extract_totp_credential_id(&cred_empty), Some("valid-id-2"));
+
+        let cred_primary = serde_json::json!({
+            "credential_id": "primary-id",
+            "id": "fallback-id",
+            "secret": "JBSWY3DPEHPK3PXP"
+        });
+        assert_eq!(
+            extract_totp_credential_id(&cred_primary),
+            Some("primary-id")
+        );
+    }
+
+    /// Verifies that has_enrolled returns true for accounts with legacy raw-string credentials,
+    /// and authenticate fails closed instead of allowing MFA bypass.
+    #[tokio::test]
+    async fn test_has_enrolled_returns_true_for_legacy_raw_string_and_authenticate_fails_closed() {
+        let store = MemoryCredentialStore::new();
+        store
+            .save_credential(
+                "user-legacy",
+                "totp",
+                serde_json::json!("legacy-secret-string"),
+            )
+            .await
+            .unwrap();
+
+        let totp_method = TotpAuthMethod::new(store);
+        assert!(totp_method.has_enrolled("user-legacy").await.unwrap());
+
+        let auth_err = totp_method
+            .authenticate(AuthInput::Totp {
+                user_id: "user-legacy".to_string(),
+                code: "123456".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(auth_err, AuthError::Credentials(_)));
     }
 }
