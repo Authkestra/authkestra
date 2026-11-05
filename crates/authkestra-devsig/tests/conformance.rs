@@ -1050,10 +1050,11 @@ async fn test_replay_marker_ttl_includes_clock_skew_and_inclusive_second() {
 
     let captured = store.recorded_ttl_secs.load(Ordering::SeqCst);
     let skew_secs = setup.config.max_clock_skew.as_secs();
-    // The TTL must be at least the remaining validity (approx 60s) + skew_secs (30s) + 1s.
-    // Allow slight execution delay: captured should be >= 50 + skew_secs + 1.
+    // Signature has 60s lifetime; without "+ max_clock_skew + 1", TTL would be <= 60s.
+    // With "+ max_clock_skew (30s) + 1", TTL must be >= 58 + skew_secs + 1 (89s).
+    let min_expected = 58 + skew_secs + 1;
     assert!(
-        captured >= skew_secs + 30,
-        "replay TTL ({captured}s) must include clock skew ({skew_secs}s) and inclusive second"
+        captured >= min_expected,
+        "replay TTL ({captured}s) must include remaining validity (~60s) + clock skew ({skew_secs}s) + 1s (expected >= {min_expected}s)"
     );
 }

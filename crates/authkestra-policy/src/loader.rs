@@ -98,21 +98,29 @@ pub struct EntityRecord {
     uid: EntityUid,
     attributes: HashMap<String, RestrictedExpression>,
     parents: HashSet<EntityUid>,
+    tags: HashMap<String, RestrictedExpression>,
 }
 
 impl EntityRecord {
-    /// A record with no attributes and no parents.
+    /// A record with no attributes, no tags, and no parents.
     pub fn new(uid: EntityUid) -> Self {
         Self {
             uid,
             attributes: HashMap::new(),
             parents: HashSet::new(),
+            tags: HashMap::new(),
         }
     }
 
     /// Add an attribute, e.g. `.attribute("owner", RestrictedExpression::new_string("alice"))`.
     pub fn attribute(mut self, name: impl Into<String>, value: RestrictedExpression) -> Self {
         self.attributes.insert(name.into(), value);
+        self
+    }
+
+    /// Add a tag, e.g. `.with_tag("env", RestrictedExpression::new_string("prod"))`.
+    pub fn with_tag(mut self, name: impl Into<String>, value: RestrictedExpression) -> Self {
+        self.tags.insert(name.into(), value);
         self
     }
 
@@ -128,10 +136,11 @@ impl EntityRecord {
     }
 
     fn to_entity(&self) -> Result<Entity, PolicyError> {
-        Entity::new(
+        Entity::new_with_tags(
             self.uid.clone(),
             self.attributes.clone(),
             self.parents.clone(),
+            self.tags.clone(),
         )
         .map_err(|e| {
             PolicyError::Entities(format!("entity {} has an invalid attribute: {e}", self.uid))
@@ -253,14 +262,32 @@ impl ResourceLoader for MemoryResourceLoader {
                 // Recursively inspect entity attributes and tags to extract all referenced entity UIDs
                 // (and transitively their parents and dependencies) so forbid and permit policies evaluate correctly.
                 let mut attr_uids = Vec::new();
-                for (_attr_name, attr_val) in entity.attrs() {
-                    if let Ok(eval_res) = attr_val {
-                        extract_referenced_uids_from_eval_result(&eval_res, &mut attr_uids);
+                for (attr_name, attr_val) in entity.attrs() {
+                    match attr_val {
+                        Ok(eval_res) => {
+                            extract_referenced_uids_from_eval_result(&eval_res, &mut attr_uids);
+                        }
+                        Err(_) => {
+                            tracing::debug!(
+                                entity = %uid,
+                                attr = %attr_name,
+                                "skipping entity UID extraction for unevaluated attribute"
+                            );
+                        }
                     }
                 }
-                for (_tag_name, tag_val) in entity.tags() {
-                    if let Ok(eval_res) = tag_val {
-                        extract_referenced_uids_from_eval_result(&eval_res, &mut attr_uids);
+                for (tag_name, tag_val) in entity.tags() {
+                    match tag_val {
+                        Ok(eval_res) => {
+                            extract_referenced_uids_from_eval_result(&eval_res, &mut attr_uids);
+                        }
+                        Err(_) => {
+                            tracing::debug!(
+                                entity = %uid,
+                                tag = %tag_name,
+                                "skipping entity UID extraction for unevaluated tag"
+                            );
+                        }
                     }
                 }
                 if !attr_uids.is_empty() {
@@ -500,6 +527,7 @@ mod tests {
         assert_eq!(record.uid(), &uid(r#"User::"alice""#));
     }
 
+    /// Tests that the memory loader recursively discovers and hydrates entities referenced in attributes, sets, and tags.
     #[tokio::test]
     async fn memory_loader_recursively_hydrates_attribute_entity_references_and_parents() {
         let loader = MemoryResourceLoader::new();
@@ -516,7 +544,10 @@ mod tests {
         loader.insert(EntityRecord::new(standbys.clone()));
         loader.insert(EntityRecord::new(bob.clone()).parent(standbys.clone()));
 
-        // Alice referencing eng_dept via direct attribute, and bob via a set attribute
+        // Alice referencing eng_dept via direct attribute, bob via a set attribute, and reviewers via a tag
+        let reviewers = uid(r#"Group::"reviewers""#);
+        loader.insert(EntityRecord::new(reviewers.clone()));
+
         let alice_uid = uid(r#"User::"alice""#);
         let alice = EntityRecord::new(alice_uid.clone())
             .attribute(
@@ -528,6 +559,10 @@ mod tests {
                 RestrictedExpression::new_set(vec![RestrictedExpression::new_entity_uid(
                     bob.clone(),
                 )]),
+            )
+            .with_tag(
+                "reviewer_group",
+                RestrictedExpression::new_entity_uid(reviewers.clone()),
             );
         loader.insert(alice);
 
@@ -553,6 +588,10 @@ mod tests {
         assert!(
             hydrated.get(&standbys).is_some(),
             "parent of set-attribute-referenced bob must be hydrated"
+        );
+        assert!(
+            hydrated.get(&reviewers).is_some(),
+            "tag-referenced reviewers group must be hydrated"
         );
     }
 }

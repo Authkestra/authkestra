@@ -20,14 +20,15 @@ pub trait PrincipalMapper: Send + Sync {
     }
 }
 
-/// Percent-encodes `:` and `%` in a principal identity component to prevent delimiter collisions.
+/// Percent-encodes `:` and `%` in a principal identity component to prevent delimiter collisions
+/// while preserving all other Unicode characters unchanged.
 pub fn encode_principal_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'%' => out.push_str("%25"),
-            b':' => out.push_str("%3A"),
-            _ => out.push(b as char),
+    for ch in s.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            ':' => out.push_str("%3A"),
+            _ => out.push(ch),
         }
     }
     out
@@ -35,6 +36,16 @@ pub fn encode_principal_component(s: &str) -> String {
 
 /// Constructs a Cedar `User` entity UID string from provider and external IDs
 /// using unambiguous percent-encoding and a `:` separator (`{encoded_provider}:{encoded_external_id}`).
+///
+/// # Migration Note
+///
+/// Earlier versions formatted composite principal IDs with an unescaped `|` delimiter
+/// (`User::"{provider_id}|{external_id}"`), or omitted the provider prefix when `provider_id`
+/// was empty. This function always includes the `:` delimiter (`User::"{prov}:{ext}"`) and
+/// percent-encodes `%` (`%25`) and `:` (`%3A`) within each component so `("a:b", "c")` and
+/// `("a", "b:c")` cannot collide. When upgrading existing Cedar policy sets or entity stores,
+/// update any hardcoded `User::"provider|id"` literals (especially in `forbid` rules) to the
+/// `User::"provider:id"` format.
 pub fn format_principal_uid_str(provider_id: &str, external_id: &str) -> String {
     let enc_prov = encode_principal_component(provider_id);
     let enc_ext = encode_principal_component(external_id);
@@ -243,6 +254,8 @@ mod tests {
         assert!(!decision.is_allowed());
     }
 
+    /// Verifies that `DefaultPrincipalMapper` prevents collisions across delimiter boundaries
+    /// and preserves non-ASCII Unicode characters in identity components.
     #[test]
     fn test_principal_id_collision_prevention() {
         let mapper = DefaultPrincipalMapper;
@@ -301,5 +314,20 @@ mod tests {
             uid3, uid4,
             "colon inside provider must not collide with colon inside external_id"
         );
+
+        // Non-ASCII external_id is preserved without UTF-8 byte corruption
+        let unicode_id = Identity {
+            provider_id: "oidc".to_string(),
+            external_id: "müller:अदिति%100".to_string(),
+            email: None,
+            username: None,
+            attributes: Default::default(),
+        };
+        assert_eq!(
+            encode_principal_component(&unicode_id.external_id),
+            "müller%3Aअदिति%25100"
+        );
+        let unicode_uid = mapper.principal(&unicode_id).unwrap().to_string();
+        assert_eq!(unicode_uid, r#"User::"oidc:müller%3Aअदिति%25100""#);
     }
 }

@@ -1192,6 +1192,7 @@ async fn test_adversarial_axum_approve_endpoint_adversarial_inputs() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// Tests that the Axum MCP router ignores unverified `x-authkestra-identity` headers by default.
 #[tokio::test]
 async fn test_mcp_axum_rejects_unverified_identity_header_by_default() {
     let pending_store = Arc::new(MemoryStore::new());
@@ -1246,6 +1247,7 @@ async fn test_mcp_axum_rejects_unverified_identity_header_by_default() {
     assert_eq!(body_json["error"]["code"], RPC_UNAUTHORIZED);
 }
 
+/// Tests that the Axum MCP router accepts `x-authkestra-identity` when explicitly opted in via builder.
 #[tokio::test]
 async fn test_mcp_axum_allows_unverified_identity_header_when_opted_in() {
     let pending_store = Arc::new(MemoryStore::new());

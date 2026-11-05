@@ -1143,6 +1143,7 @@ async fn test_adversarial_actix_approve_endpoint_adversarial_inputs() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// Tests that the Actix MCP router ignores unverified `x-authkestra-identity` headers by default.
 #[actix_web::test]
 async fn test_mcp_actix_rejects_unverified_identity_header_by_default() {
     let pending_store = Arc::new(MemoryStore::new());
@@ -1197,6 +1198,7 @@ async fn test_mcp_actix_rejects_unverified_identity_header_by_default() {
     assert_eq!(body_json["error"]["code"], RPC_UNAUTHORIZED);
 }
 
+/// Tests that the Actix MCP router accepts `x-authkestra-identity` when explicitly opted in via builder.
 #[actix_web::test]
 async fn test_mcp_actix_allows_unverified_identity_header_when_opted_in() {
     let pending_store = Arc::new(MemoryStore::new());
