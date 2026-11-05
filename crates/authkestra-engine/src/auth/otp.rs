@@ -72,12 +72,6 @@ pub struct OtpCode {
 
 /// What the store holds against a subject.
 ///
-fn default_challenge_id() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-/// What the store holds against a subject.
-///
 /// Immutable for its whole life: the attempt budget lives in a counter beside
 /// it rather than in here, because a field inside a serialised record cannot
 /// be decremented atomically. See [`AtomicDecrement`].
@@ -85,7 +79,8 @@ fn default_challenge_id() -> String {
 #[non_exhaustive]
 pub struct OtpChallenge {
     /// Unique generation ID for this challenge (UUID v4).
-    #[serde(default = "default_challenge_id")]
+    /// Defaults to an empty string when deserializing pre-deployment records.
+    #[serde(default)]
     pub challenge_id: String,
     /// SHA-256 of the code, never the code.
     pub code_hash: String,
@@ -99,6 +94,16 @@ pub struct OtpChallenge {
 /// Derives the store key for an attempt counter bound to a specific challenge generation.
 fn counter_key(key: &str, challenge_id: &str) -> String {
     format!("{key}:gen:{challenge_id}")
+}
+
+/// Attempt counter key for a challenge. Records written before generation IDs
+/// existed have an empty ID and keep their counter under the subject key.
+fn attempt_counter_key(key: &str, challenge_id: &str) -> String {
+    if challenge_id.is_empty() {
+        key.to_string()
+    } else {
+        counter_key(key, challenge_id)
+    }
 }
 
 /// Derives the key that holds a subject's resend cooldown.
@@ -348,21 +353,19 @@ where
         }
     }
 
-    /// Drops a challenge whose budget is gone.
+    /// Drops a challenge whose budget is gone, only if the stored challenge
+    /// matches `challenge` (protecting any newer challenge minted concurrently).
     ///
     /// Best effort. A failure leaves a challenge its own TTL will collect,
     /// and whose counter is spent — and since acceptance requires winning
     /// `consume` rather than merely finding the record, a challenge left
     /// behind here is not a usable one.
-    ///
-    /// The counter is left to expire. It cannot be inherited by a later
-    /// challenge for the same subject, because `mint` replaces it.
-    async fn discard(&self, key: &str, challenge_id: &str) {
-        if let Err(e) = self.store.delete(key).await {
+    async fn discard(&self, key: &str, challenge: &OtpChallenge) {
+        if let Err(e) = self.store.delete_if_eq(key, challenge).await {
             tracing::warn!(error = %e, "failed to discard a spent otp challenge");
         }
-        if !challenge_id.is_empty() {
-            let counter_k = counter_key(key, challenge_id);
+        if !challenge.challenge_id.is_empty() {
+            let counter_k = counter_key(key, &challenge.challenge_id);
             if let Err(e) = self.store.delete(&counter_k).await {
                 tracing::debug!(error = %e, "failed to clean up otp counter key");
             }
@@ -424,7 +427,7 @@ where
             return Err(AuthError::InvalidCredentials);
         };
 
-        let counter_k = counter_key(&key, &challenge.challenge_id);
+        let counter_k = attempt_counter_key(&key, &challenge.challenge_id);
         let remaining = self
             .store
             .decrement(&counter_k)
@@ -436,7 +439,7 @@ where
         // invert the guard entirely.
         let Some(remaining) = remaining else {
             tracing::warn!("otp rejected: no attempt budget for a live challenge");
-            self.discard(&key, &challenge.challenge_id).await;
+            self.discard(&key, &challenge).await;
             return Err(AuthError::InvalidCredentials);
         };
 
@@ -452,7 +455,7 @@ where
                 // Deleted rather than left to expire, so an exhausted
                 // challenge is indistinguishable from one that never existed.
                 tracing::warn!("otp attempt budget exhausted; discarding the challenge");
-                self.discard(&key, &challenge.challenge_id).await;
+                self.discard(&key, &challenge).await;
             }
             return Err(AuthError::InvalidCredentials);
         }
@@ -488,7 +491,7 @@ where
                 (consumed.expires_at - chrono::Utc::now().timestamp()).max(1) as u64;
             if let Err(e) = self
                 .store
-                .set(&key, consumed, Duration::from_secs(remaining_secs))
+                .insert_if_absent(&key, consumed, Duration::from_secs(remaining_secs))
                 .await
             {
                 tracing::error!(error = %e, "failed to restore replaced challenge into store");
@@ -852,6 +855,14 @@ mod tests {
         ) -> Result<Option<OtpChallenge>, crate::store::StoreError> {
             self.inner.consume(key).await
         }
+
+        async fn delete_if_eq(
+            &self,
+            key: &str,
+            expected: &OtpChallenge,
+        ) -> Result<bool, crate::store::StoreError> {
+            self.inner.delete_if_eq(key, expected).await
+        }
     }
 
     #[async_trait]
@@ -978,6 +989,7 @@ mod tests {
         );
     }
 
+    /// Verifies that zero and sub-second TTLs are rejected on mint.
     #[tokio::test]
     async fn zero_and_sub_second_ttl_are_rejected() {
         let m = method();
@@ -996,6 +1008,7 @@ mod tests {
             .is_ok());
     }
 
+    /// Verifies that a newer challenge supersedes an older one without losing its own budget.
     #[tokio::test]
     async fn new_mint_supersedes_old_and_old_submission_does_not_consume_new() {
         let m = method();
@@ -1010,5 +1023,45 @@ mod tests {
 
         // And the second code must STILL work!
         assert!(m.authenticate(submit("alice", &second.code)).await.is_ok());
+    }
+
+    /// Verifies that pre-deployment challenges serialized without `challenge_id` retain a stable
+    /// empty ID and read their counter from the bare subject key, and that `discard` only deletes
+    /// the matching challenge generation.
+    #[tokio::test]
+    async fn legacy_challenge_without_id_and_conditional_discard() {
+        let store = MemoryStore::<OtpChallenge>::new();
+        let m = OtpAuthMethod::new(store.clone());
+
+        let legacy_json = serde_json::json!({
+            "code_hash": hash_code("654321"),
+            "channel": "Email"
+        });
+        let legacy: OtpChallenge = serde_json::from_value(legacy_json).unwrap();
+        assert!(legacy.challenge_id.is_empty());
+
+        let key = challenge_key("legacy_user");
+        store.set(&key, legacy.clone(), TTL).await.unwrap();
+        store.init_counter(&key, 2, TTL).await.unwrap();
+
+        // Authenticate with the legacy challenge
+        let identity = m
+            .authenticate(submit("legacy_user", "654321"))
+            .await
+            .unwrap();
+        assert_eq!(identity.external_id, "legacy_user");
+
+        // Now verify conditional discard: mint a fresh challenge, then call discard with the old `legacy` record
+        let fresh = m
+            .mint("legacy_user", TTL, OtpChannel::Email, 2)
+            .await
+            .unwrap();
+        m.discard(&key, &legacy).await;
+
+        // Fresh challenge must still be intact and usable
+        assert!(m
+            .authenticate(submit("legacy_user", &fresh.code))
+            .await
+            .is_ok());
     }
 }

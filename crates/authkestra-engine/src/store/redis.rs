@@ -105,7 +105,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for Red
             return Ok(());
         }
 
-        let ttl_ms = ttl.as_millis() as u64;
+        let ttl_ms = (ttl.as_millis() as u64).max(1);
         let _: () = conn
             .pset_ex(self.key(key), json, ttl_ms)
             .await
@@ -238,6 +238,47 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicConsume<T> f
             None => Ok(None),
         }
     }
+
+    #[tracing::instrument(skip(self, expected))]
+    async fn delete_if_eq(&self, key: &str, expected: &T) -> Result<bool, StoreError> {
+        tracing::debug!(key = %key, "atomically deleting if equal from redis store");
+        let mut conn = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Redis connection error");
+                StoreError::Internal(format!("Redis connection error: {e}"))
+            })?;
+
+        let expected_json = serde_json::to_string(expected).map_err(|e| {
+            tracing::error!(error = %e, "Serialization error");
+            StoreError::Serialization(format!("Serialization error: {e}"))
+        })?;
+
+        let script = redis::Script::new(
+            r#"
+            local val = redis.call('GET', KEYS[1])
+            if val and val == ARGV[1] then
+                redis.call('DEL', KEYS[1])
+                return 1
+            end
+            return 0
+            "#,
+        );
+
+        let deleted: i64 = script
+            .key(self.key(key))
+            .arg(expected_json)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Redis delete_if_eq script error");
+                StoreError::Internal(format!("Redis delete_if_eq script error: {e}"))
+            })?;
+
+        Ok(deleted == 1)
+    }
 }
 
 #[async_trait]
@@ -369,7 +410,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> 
             return Ok(());
         }
 
-        let ttl_ms = ttl.as_millis() as u64;
+        let ttl_ms = (ttl.as_millis() as u64).max(1);
         let mut pipe = redis::pipe();
         pipe.atomic().pset_ex(self.key(key), json, ttl_ms).pset_ex(
             self.index_key(index),
@@ -643,5 +684,24 @@ mod tests {
         let sk_none: Option<String> = store.get_by_index("idx_sk").await.unwrap();
         assert_eq!(pk_none, None);
         assert_eq!(sk_none, None);
+
+        // Positive sub-millisecond TTL rounds up to at least 1ms rather than passing 0 to PSETEX
+        store
+            .set(
+                "sub_ms_key",
+                "value".to_string(),
+                Duration::from_micros(500),
+            )
+            .await
+            .unwrap();
+        store
+            .set_indexed(
+                "sub_ms_pk",
+                "sub_ms_sk",
+                "value".to_string(),
+                Duration::from_micros(500),
+            )
+            .await
+            .unwrap();
     }
 }

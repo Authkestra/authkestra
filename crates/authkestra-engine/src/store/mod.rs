@@ -20,8 +20,21 @@ pub trait KvStore<T>: Send + Sync + 'static {
 
 /// Backends that can atomically fetch-and-remove a value implement this.
 #[async_trait]
-pub trait AtomicConsume<T>: KvStore<T> {
+pub trait AtomicConsume<T: Sync>: KvStore<T> {
+    /// Atomically fetches and removes the value stored under `key`.
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError>;
+
+    /// Atomically removes the value stored under `key` only if its current
+    /// value matches `expected`.
+    ///
+    /// Returns `Ok(true)` if the matching entry was removed, or `Ok(false)` if
+    /// the key was absent, expired, or held a different value.
+    async fn delete_if_eq(&self, key: &str, expected: &T) -> Result<bool, StoreError> {
+        let _ = (key, expected);
+        Err(StoreError::Internal(
+            "delete_if_eq not supported by this store".to_string(),
+        ))
+    }
 }
 
 /// Backends that can atomically insert a value only if no value is

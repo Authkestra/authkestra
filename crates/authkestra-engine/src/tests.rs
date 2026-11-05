@@ -706,6 +706,7 @@ mod authenticate_error_paths {
         ));
     }
 
+    /// Mints an MFA continuation token with custom `primary_method` and `allowed_methods` claims.
     fn mfa_token_custom<S, T>(
         engine: &Engine<S, T>,
         sub: &str,
@@ -728,6 +729,7 @@ mod authenticate_error_paths {
         .expect("signing should succeed")
     }
 
+    /// Verifies that MFA continuation refuses a second factor that matches the primary method.
     #[tokio::test]
     async fn mfa_continuation_rejects_matching_primary_method() {
         let engine = Engine::builder()
@@ -740,6 +742,7 @@ mod authenticate_error_paths {
         assert!(matches!(result, Err(AuthError::InvalidInput)));
     }
 
+    /// Verifies that MFA continuation refuses a second factor not listed in `allowed_methods`.
     #[tokio::test]
     async fn mfa_continuation_rejects_method_not_in_allowed_methods() {
         let engine = Engine::builder()
@@ -795,6 +798,7 @@ mod authenticate_error_paths {
         }
     }
 
+    /// Verifies that an error from `has_enrolled` propagates instead of failing open.
     #[tokio::test]
     async fn mfa_has_enrolled_error_propagates_and_does_not_fail_open() {
         let engine = Engine::builder()

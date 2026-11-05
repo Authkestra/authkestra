@@ -78,6 +78,7 @@ macro_rules! impl_credential_store {
         $delete_credential_query:expr,
         $delete_credentials_query:expr,
         $claim_totp_step_query:expr,
+        $claim_rebind_step:expr,
         $migrate_q1:expr,
         $migrate_q2:expr
     ) => {
@@ -285,10 +286,15 @@ macro_rules! impl_credential_store {
                 );
                 let query = format!($claim_totp_step_query, self.table_name);
 
-                let result = sqlx::query(&query)
+                let mut q = sqlx::query(&query)
                     .bind(matched_step as i64)
                     .bind(credential_id)
-                    .bind(user_id)
+                    .bind(user_id);
+                if $claim_rebind_step {
+                    // MySQL uses positional placeholders, so matched_step is bound again for `< ?`.
+                    q = q.bind(matched_step as i64);
+                }
+                let result = q
                     .execute(&self.pool)
                     .await
                     .map_err(|e| {
@@ -330,6 +336,7 @@ impl_credential_store! {
     "DELETE FROM {} WHERE credential_id = $1 AND user_id = $2 AND cred_type = $3",
     "DELETE FROM {} WHERE user_id = $1 AND cred_type = $2",
     "UPDATE {0} SET extra_data = (coalesce(nullif(extra_data, ''), '{{}}')::jsonb || jsonb_build_object('last_used_step', $1::bigint))::text WHERE credential_id = $2 AND user_id = $3 AND cred_type = 'totp' AND (extra_data IS NULL OR (coalesce(nullif(extra_data, ''), '{{}}')::jsonb->>'last_used_step') IS NULL OR ((coalesce(nullif(extra_data, ''), '{{}}')::jsonb->>'last_used_step')::bigint < $1))",
+    false,
     "CREATE TABLE IF NOT EXISTS {table} (credential_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, cred_type TEXT NOT NULL, secret_key TEXT, extra_data TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX IF NOT EXISTS {table}_user_idx ON {table}(user_id, cred_type)"
 }
@@ -344,6 +351,7 @@ impl_credential_store! {
     "DELETE FROM {} WHERE credential_id = ?1 AND user_id = ?2 AND cred_type = ?3",
     "DELETE FROM {} WHERE user_id = ?1 AND cred_type = ?2",
     "UPDATE {} SET extra_data = json_set(coalesce(extra_data, '{{}}'), '$.last_used_step', ?1) WHERE credential_id = ?2 AND user_id = ?3 AND cred_type = 'totp' AND (extra_data IS NULL OR json_extract(extra_data, '$.last_used_step') IS NULL OR json_extract(extra_data, '$.last_used_step') < ?1)",
+    false,
     "CREATE TABLE IF NOT EXISTS {table} (credential_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, cred_type TEXT NOT NULL, secret_key TEXT, extra_data TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX IF NOT EXISTS {table}_user_idx ON {table}(user_id, cred_type)"
 }
@@ -358,6 +366,7 @@ impl_credential_store! {
     "DELETE FROM {} WHERE credential_id = ? AND user_id = ? AND cred_type = ?",
     "DELETE FROM {} WHERE user_id = ? AND cred_type = ?",
     "UPDATE {} SET extra_data = JSON_SET(COALESCE(NULLIF(extra_data, ''), '{{}}'), '$.last_used_step', ?) WHERE credential_id = ? AND user_id = ? AND cred_type = 'totp' AND (extra_data IS NULL OR extra_data = '' OR JSON_EXTRACT(extra_data, '$.last_used_step') IS NULL OR JSON_EXTRACT(extra_data, '$.last_used_step') < ?)",
+    true,
     "CREATE TABLE IF NOT EXISTS {table} (credential_id VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255) NOT NULL, cred_type VARCHAR(255) NOT NULL, secret_key TEXT, extra_data TEXT, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX {table}_user_idx ON {table}(user_id, cred_type)"
 }
@@ -501,5 +510,16 @@ mod tests {
             update_result.is_ok(),
             "legitimate owner update must succeed"
         );
+    }
+
+    /// Verifies that the MySQL `claim_totp_step` SQL template contains 4 positional `?`
+    /// placeholders matching the 4 bound arguments (`matched_step`, `credential_id`, `user_id`, `matched_step`).
+    #[test]
+    fn test_mysql_claim_totp_step_placeholder_count() {
+        let mysql_query = format!(
+            "UPDATE {} SET extra_data = JSON_SET(COALESCE(NULLIF(extra_data, ''), '{{}}'), '$.last_used_step', ?) WHERE credential_id = ? AND user_id = ? AND cred_type = 'totp' AND (extra_data IS NULL OR extra_data = '' OR JSON_EXTRACT(extra_data, '$.last_used_step') IS NULL OR JSON_EXTRACT(extra_data, '$.last_used_step') < ?)",
+            "authkestra_credentials"
+        );
+        assert_eq!(mysql_query.matches('?').count(), 4);
     }
 }

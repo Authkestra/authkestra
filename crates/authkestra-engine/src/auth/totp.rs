@@ -4,7 +4,24 @@ use crate::auth::{
 use async_trait::async_trait;
 use totp_rs::{Algorithm, TOTP};
 
+/// Extracts the non-empty credential identifier (`credential_id` or fallback `id`) from a TOTP credential object.
+fn extract_totp_credential_id(cred: &serde_json::Value) -> Option<&str> {
+    cred.get("credential_id")
+        .or_else(|| cred.get("id"))
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.trim().is_empty())
+}
+
 /// TOTP authentication method.
+///
+/// # Credential Format
+///
+/// Stored TOTP credentials must be JSON objects containing a non-empty `"secret"` (Base32) and
+/// a non-empty `"credential_id"` (or `"id"`) field so replay-protection step claims can address
+/// the record atomically. Legacy raw-string secrets without a credential identifier are not
+/// accepted by [`TotpAuthMethod::authenticate`] or counted by [`TotpAuthMethod::has_enrolled`],
+/// and are retired via [`CredentialStore::delete_credentials`] when the user re-enrolls with
+/// [`TotpAuthMethod::register_totp`].
 #[non_exhaustive]
 pub struct TotpAuthMethod<S: CredentialStore> {
     store: S,
@@ -86,9 +103,14 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
         let existing = self.store.get_credentials(user_id, "totp").await?;
         let mut stale_ids = Vec::new();
         let mut unidentified = 0usize;
+        let mut has_legacy_raw_string = false;
         let mut replacing = false;
         for cred in &existing {
-            match cred.get("credential_id").and_then(|v| v.as_str()) {
+            if cred.is_string() {
+                has_legacy_raw_string = true;
+                continue;
+            }
+            match extract_totp_credential_id(cred) {
                 // Stored under the deterministic id: `save_credential` is expected to replace it.
                 Some(id) if id == credential_id => replacing = true,
                 Some(id) => stale_ids.push(id.to_string()),
@@ -104,6 +126,15 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
             return Err(AuthError::Internal(
                 "Cannot rotate TOTP: existing credentials carry no credential_id and cannot be safely retired".into(),
             ));
+        }
+        if has_legacy_raw_string {
+            tracing::info!(
+                user_id = %user_id,
+                "Retiring legacy raw-string TOTP credentials via delete_credentials before re-enrollment"
+            );
+            self.store.delete_credentials(user_id, "totp").await?;
+            stale_ids.clear();
+            replacing = false;
         }
 
         let val = serde_json::json!({
@@ -127,9 +158,7 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
                 .get_credentials(user_id, "totp")
                 .await?
                 .iter()
-                .filter(|c| {
-                    c.get("credential_id").and_then(|v| v.as_str()) == Some(credential_id.as_str())
-                })
+                .filter(|c| extract_totp_credential_id(c) == Some(credential_id.as_str()))
                 .count();
             if duplicates > 1 {
                 tracing::warn!(
@@ -220,7 +249,12 @@ impl<S: CredentialStore + 'static> AuthMethod for TotpAuthMethod<S> {
 
     async fn has_enrolled(&self, user_id: &str) -> Result<bool, AuthError> {
         let creds = self.store.get_credentials(user_id, "totp").await?;
-        Ok(!creds.is_empty())
+        Ok(creds.iter().any(|c| {
+            extract_totp_credential_id(c).is_some()
+                && c.get("secret")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty())
+        }))
     }
 
     async fn authenticate(&self, input: AuthInput) -> Result<Identity, AuthError> {
@@ -235,25 +269,21 @@ impl<S: CredentialStore + 'static> AuthMethod for TotpAuthMethod<S> {
             ));
         };
 
-        // secret_val could be a string (old implementation backward compatibility) or an object
-        let (secret_b32, credential_id, last_used_step) = if let Some(s) = secret_val.as_str() {
-            (s.to_string(), None, 0)
-        } else if let Some(obj) = secret_val.as_object() {
+        let (secret_b32, credential_id, last_used_step) = if let Some(obj) = secret_val.as_object()
+        {
             let secret = obj
                 .get("secret")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let cred_id = obj
-                .get("credential_id")
-                .or_else(|| obj.get("id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let cred_id = extract_totp_credential_id(secret_val).map(|s| s.to_string());
             let step = obj
                 .get("last_used_step")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             (secret, cred_id, step)
+        } else if secret_val.is_string() {
+            (String::new(), None, 0)
         } else {
             return Err(AuthError::Internal(
                 "Invalid stored TOTP secret format".to_string(),
@@ -460,13 +490,7 @@ mod tests {
             let mut creds = self.creds.lock().unwrap();
             if let Some(val_list) = creds.get_mut(&key) {
                 let original_len = val_list.len();
-                val_list.retain(|val| {
-                    if let Some(obj) = val.as_object() {
-                        obj.get("credential_id").and_then(|v| v.as_str()) != Some(credential_id)
-                    } else {
-                        true
-                    }
-                });
+                val_list.retain(|val| extract_totp_credential_id(val) != Some(credential_id));
                 Ok(val_list.len() < original_len)
             } else {
                 Ok(false)
@@ -499,8 +523,8 @@ mod tests {
                 return Ok(false);
             };
             for val in val_list.iter_mut() {
-                if let Some(obj) = val.as_object_mut() {
-                    if obj.get("credential_id").and_then(|v| v.as_str()) == Some(credential_id) {
+                if extract_totp_credential_id(val) == Some(credential_id) {
+                    if let Some(obj) = val.as_object_mut() {
                         let current = obj
                             .get("last_used_step")
                             .and_then(|v| v.as_u64())
@@ -1015,23 +1039,32 @@ mod tests {
         assert!(matches!(result, Err(AuthError::Unsupported)));
     }
 
+    /// Verifies that identifierless TOTP credentials are rejected during authentication
+    /// and ignored by `has_enrolled`.
     #[tokio::test]
     async fn test_totp_rejects_identifierless_credentials() {
         let store = MockStore {
             creds: Mutex::new(HashMap::new()),
         };
-        // Insert a TOTP credential with no credential_id
+        // Insert a TOTP credential with no credential_id and a legacy raw-string secret
         store.creds.lock().unwrap().insert(
             "user_no_id:totp".to_string(),
-            vec![serde_json::json!({
-                "secret": "JBSWY3DPEHPK3PXP",
-                "algorithm": "SHA1",
-                "digits": 6,
-                "step": 30,
-            })],
+            vec![
+                serde_json::json!({
+                    "secret": "JBSWY3DPEHPK3PXP",
+                    "algorithm": "SHA1",
+                    "digits": 6,
+                    "step": 30,
+                }),
+                serde_json::Value::String("JBSWY3DPEHPK3PXP".to_string()),
+            ],
         );
 
         let totp_method = TotpAuthMethod::new(store);
+        assert!(
+            !totp_method.has_enrolled("user_no_id").await.unwrap(),
+            "has_enrolled must not report identifierless or raw-string credentials as enrolled"
+        );
         let err = totp_method
             .authenticate(AuthInput::Totp {
                 user_id: "user_no_id".to_string(),
@@ -1045,6 +1078,56 @@ mod tests {
             }
             other => panic!("expected AuthError::Credentials, got {:?}", other),
         }
+    }
+
+    /// Verifies that legacy TOTP credentials keyed under `"id"` or stored as raw strings
+    /// are properly retired on re-enrollment.
+    #[tokio::test]
+    async fn test_totp_reenrollment_retires_id_fallback_and_raw_string() {
+        let store = MockStore {
+            creds: Mutex::new(HashMap::new()),
+        };
+        store.creds.lock().unwrap().insert(
+            "user_legacy:totp".to_string(),
+            vec![
+                serde_json::json!({
+                    "id": "legacy_id_1",
+                    "secret": "JBSWY3DPEHPK3PXP",
+                }),
+                serde_json::Value::String("JBSWY3DPEHPK3PXP".to_string()),
+            ],
+        );
+
+        let totp_method = TotpAuthMethod::new(store);
+        assert!(
+            totp_method.has_enrolled("user_legacy").await.unwrap(),
+            "credential with 'id' fallback should count as enrolled"
+        );
+
+        let (_new_secret, _) = totp_method
+            .register_totp(
+                &fresh_identity("user_legacy"),
+                &permissive_gate(),
+                "Engine",
+                "user_legacy",
+            )
+            .await
+            .unwrap();
+
+        let creds = totp_method
+            .store
+            .get_credentials("user_legacy", "totp")
+            .await
+            .unwrap();
+        assert_eq!(
+            creds.len(),
+            1,
+            "Only the newly enrolled credential should remain"
+        );
+        assert_eq!(
+            creds[0].get("credential_id").and_then(|v| v.as_str()),
+            Some("totp:user_legacy")
+        );
     }
 
     struct FailingRetirementStore {
@@ -1114,6 +1197,7 @@ mod tests {
         }
     }
 
+    /// Verifies that `register_totp` propagates an error if retiring existing credentials fails.
     #[tokio::test]
     async fn test_register_totp_fails_if_retirement_fails() {
         let store = FailingRetirementStore {

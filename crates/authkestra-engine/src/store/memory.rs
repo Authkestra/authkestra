@@ -112,7 +112,8 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
 }
 
 #[async_trait]
-impl<T: Clone + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
+impl<T: Clone + serde::Serialize + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
+    /// Atomically fetches and removes the value stored under `key`.
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError> {
         tracing::debug!("atomically consuming from memory store");
         let mut data = self.data.lock().unwrap();
@@ -123,6 +124,27 @@ impl<T: Clone + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
             return Ok(Some(entry.value));
         }
         Ok(None)
+    }
+
+    /// Atomically deletes the entry at `key` only if its unexpired value equals `expected`.
+    async fn delete_if_eq(&self, key: &str, expected: &T) -> Result<bool, StoreError> {
+        tracing::debug!(key = %key, "atomically deleting if equal from memory store");
+        let expected_val =
+            serde_json::to_value(expected).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        let mut data = self.data.lock().unwrap();
+        if let Some(entry) = data.get(key) {
+            if entry.is_expired() {
+                data.remove(key);
+                return Ok(false);
+            }
+            let current_val = serde_json::to_value(&entry.value)
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            if current_val == expected_val {
+                data.remove(key);
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -335,11 +357,25 @@ impl MemoryCredentialStore {
             creds: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    /// Acquires the internal credential mutex, mapping a poisoned lock to `AuthError::Internal`.
+    fn lock(
+        &self,
+    ) -> Result<
+        std::sync::MutexGuard<'_, HashMap<String, Vec<serde_json::Value>>>,
+        crate::auth::error::AuthError,
+    > {
+        self.creds.lock().map_err(|_| {
+            tracing::error!("memory credential store mutex poisoned");
+            crate::auth::error::AuthError::Internal("credential store unavailable".into())
+        })
+    }
 }
 
 #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
 #[async_trait]
 impl crate::auth::CredentialStore for MemoryCredentialStore {
+    /// Saves or replaces a credential for `user_id` and `cred_type`.
     async fn save_credential(
         &self,
         user_id: &str,
@@ -347,7 +383,7 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         data: serde_json::Value,
     ) -> Result<(), crate::auth::error::AuthError> {
         let key = format!("{user_id}:{cred_type}");
-        let mut creds = self.creds.lock().unwrap();
+        let mut creds = self.lock()?;
         let list = creds.entry(key).or_default();
         let cred_id = data
             .get("credential_id")
@@ -368,22 +404,24 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         Ok(())
     }
 
+    /// Retrieves all credentials stored for `user_id` and `cred_type`.
     async fn get_credentials(
         &self,
         user_id: &str,
         cred_type: &str,
     ) -> Result<Vec<serde_json::Value>, crate::auth::error::AuthError> {
         let key = format!("{user_id}:{cred_type}");
-        let creds = self.creds.lock().unwrap();
+        let creds = self.lock()?;
         Ok(creds.get(&key).cloned().unwrap_or_default())
     }
 
+    /// Updates fields of a stored credential identified by `credential_id`.
     async fn update_credential(
         &self,
         credential_id: &str,
         data: serde_json::Value,
     ) -> Result<(), crate::auth::error::AuthError> {
-        let mut creds = self.creds.lock().unwrap();
+        let mut creds = self.lock()?;
         for list in creds.values_mut() {
             for val in list.iter_mut() {
                 if let Some(obj) = val.as_object_mut() {
@@ -405,6 +443,7 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         Ok(())
     }
 
+    /// Deletes a specific credential by `credential_id` for `user_id` and `cred_type`.
     async fn delete_credential(
         &self,
         user_id: &str,
@@ -412,7 +451,7 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         credential_id: &str,
     ) -> Result<bool, crate::auth::error::AuthError> {
         let key = format!("{user_id}:{cred_type}");
-        let mut creds = self.creds.lock().unwrap();
+        let mut creds = self.lock()?;
         if let Some(list) = creds.get_mut(&key) {
             let orig = list.len();
             list.retain(|c| {
@@ -427,13 +466,14 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         }
     }
 
+    /// Deletes all credentials of `cred_type` for `user_id`.
     async fn delete_credentials(
         &self,
         user_id: &str,
         cred_type: &str,
     ) -> Result<u64, crate::auth::error::AuthError> {
         let key = format!("{user_id}:{cred_type}");
-        let mut creds = self.creds.lock().unwrap();
+        let mut creds = self.lock()?;
         if let Some(list) = creds.remove(&key) {
             Ok(list.len() as u64)
         } else {
@@ -441,6 +481,7 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         }
     }
 
+    /// Atomically claims `matched_step` for a TOTP credential if it exceeds `last_used_step`.
     async fn claim_totp_step(
         &self,
         user_id: &str,
@@ -448,7 +489,7 @@ impl crate::auth::CredentialStore for MemoryCredentialStore {
         matched_step: u64,
     ) -> Result<bool, crate::auth::error::AuthError> {
         let key = format!("{user_id}:totp");
-        let mut creds = self.creds.lock().unwrap();
+        let mut creds = self.lock()?;
         let Some(list) = creds.get_mut(&key) else {
             return Ok(false);
         };
