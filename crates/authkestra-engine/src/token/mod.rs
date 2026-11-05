@@ -729,6 +729,12 @@ impl TokenManager {
     /// from `jsonwebtoken` until #350; it is set explicitly here now, so the
     /// window this crate honours no longer depends on a transitive
     /// dependency's default.
+    ///
+    /// # Required claims
+    ///
+    /// When `expected_aud` is `Some`, the token must contain an `aud` claim.
+    /// When the manager has an issuer, the token must contain an `iss` claim.
+    /// A token that lacks either required claim is rejected with [`AuthError::Token`].
     pub fn validate_token(
         &self,
         token: &str,

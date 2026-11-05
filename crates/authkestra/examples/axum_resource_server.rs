@@ -97,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut validation = jsonwebtoken::Validation::new(validation_config.algorithms[0]);
     validation.algorithms = validation_config.algorithms;
+    validation.validate_nbf = true;
     if let Some(iss) = validation_config.issuer {
         validation.set_issuer(&[iss]);
         validation.required_spec_claims.insert("iss".to_string());
