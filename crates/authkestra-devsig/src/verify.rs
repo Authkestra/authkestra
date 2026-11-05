@@ -93,7 +93,7 @@ pub async fn verify(
             tracing::warn!(
                 target: "authkestra_devsig",
                 reason = error.code(),
-                error = %sanitized_error,
+                error = ?sanitized_error,
                 method = ?request.method,
                 path = ?request.path,
                 "device-signature request rejected"
@@ -144,7 +144,7 @@ async fn verify_inner(
         // different kinds of event: one is a client being refused, the other
         // is this service degrading.
         Ok(false) => {
-            tracing::warn!(target: "authkestra_devsig", jti = %sig.jti, "jti already seen");
+            tracing::warn!(target: "authkestra_devsig", jti = ?sig.jti, "jti already seen");
             return Err(VerifyError::ReplayDetected);
         }
         Err(store_err) => {

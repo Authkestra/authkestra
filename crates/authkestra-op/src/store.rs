@@ -534,13 +534,13 @@ impl<
         self.devices.get_device_code(device_code).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, user_code))]
     async fn get_by_user_code(
         &mut self,
         user_code: &str,
     ) -> Result<Option<crate::device::DeviceCodeSession>, authkestra_engine::store::StoreError>
     {
-        tracing::debug!(user_code = %user_code, "CompositeOpStore: getting by user code");
+        tracing::debug!("CompositeOpStore: getting by user code");
         self.devices.get_by_user_code(user_code).await
     }
 
