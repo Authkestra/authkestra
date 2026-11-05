@@ -146,12 +146,7 @@ pub trait IndexedKvStore<T: Send + 'static>: KvStore<T> {
         value: T,
         ttl: Duration,
         predicate: for<'a> fn(&'a T) -> bool,
-    ) -> Result<bool, StoreError> {
-        let _ = (primary_key, secondary_key, value, ttl, predicate);
-        Err(StoreError::Internal(
-            "update_indexed_if not supported by this store".to_string(),
-        ))
-    }
+    ) -> Result<bool, StoreError>;
 }
 
 #[cfg(feature = "memory")]

@@ -285,8 +285,14 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             value,
             expires_at: Some(Instant::now() + ttl),
         };
-        let mut data = self.data.lock().unwrap();
-        let mut indices = self.indices.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
+        let mut indices = self
+            .indices
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
 
         data.insert(primary_key.to_string(), entry);
         indices.insert(secondary_key.to_string(), primary_key.to_string());
@@ -307,8 +313,14 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             secondary_key = %secondary_key,
             "conditionally updating indexed record in memory store"
         );
-        let mut data = self.data.lock().unwrap();
-        let mut indices = self.indices.lock().unwrap();
+        let mut data = self.data.lock().map_err(|e| {
+            tracing::error!(error = %e, "memory store data mutex poisoned in update_indexed_if");
+            StoreError::Internal(format!("mutex poisoned: {e}"))
+        })?;
+        let mut indices = self.indices.lock().map_err(|e| {
+            tracing::error!(error = %e, "memory store indices mutex poisoned in update_indexed_if");
+            StoreError::Internal(format!("mutex poisoned: {e}"))
+        })?;
 
         let (expired, allowed) = match data.get(primary_key) {
             Some(existing) if existing.is_expired() => (true, false),
@@ -337,12 +349,18 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
     async fn get_by_index(&self, secondary_key: &str) -> Result<Option<T>, StoreError> {
         tracing::debug!(secondary_key = %secondary_key, "loading by index from memory store");
         let primary_key_opt = {
-            let indices = self.indices.lock().unwrap();
+            let indices = self
+                .indices
+                .lock()
+                .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
             indices.get(secondary_key).cloned()
         };
 
         if let Some(primary_key) = primary_key_opt {
-            let mut data = self.data.lock().unwrap();
+            let mut data = self
+                .data
+                .lock()
+                .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
             if let Some(entry) = data.get(&primary_key) {
                 if entry.is_expired() {
                     data.remove(&primary_key);
