@@ -9,6 +9,38 @@ mod axum_attestation;
 #[path = "../examples/actix_op_server_attestation.rs"]
 mod actix_attestation;
 
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/axum_op_server.rs"]
+mod axum_op_server;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/actix_op_server.rs"]
+mod actix_op_server;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/axum_oauth_stateless.rs"]
+mod axum_oauth_stateless;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/actix_oauth_stateless.rs"]
+mod actix_oauth_stateless;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/axum_op_server_custom_grant.rs"]
+mod axum_op_server_custom_grant;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/actix_op_server_custom_grant.rs"]
+mod actix_op_server_custom_grant;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/axum_op_server_sqlx.rs"]
+mod axum_op_server_sqlx;
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/actix_op_server_sqlx.rs"]
+mod actix_op_server_sqlx;
+
 use authkestra_op::attestation::{PrincipalType, SecondFactorProof, SecondFactorVerifier};
 use authkestra_op::OpError;
 use std::sync::Mutex;
@@ -108,19 +140,18 @@ async fn test_example_demo_otp_verifier_rejects_invalid_proof() {
     assert!(matches!(res_actix, Err(OpError::SecondFactorFailed)));
 }
 
-/// Tests that resolve_token_secret selects valid configured keys, falls back to secondary valid key when primary is short,
-/// and falls back to random 32-byte ephemeral key when neither is valid.
-#[test]
-fn test_resolve_token_secret_configured_and_fallback_behavior() {
-    let _lock = ENV_LOCK.lock().unwrap();
+type SecretResolver = fn() -> Vec<u8>;
 
+/// Helper asserting configured-secret, fallback-secret, and ephemeral random key generation
+/// behaviors for any token-secret resolver implementation.
+fn assert_token_secret_resolver_behavior(resolve_fn: SecretResolver) {
     // 1. Primary valid (>= 32 bytes)
     std::env::set_var(
         "AUTHKESTRA_TOKEN_SECRET",
         "custom-valid-secret-key-that-is-at-least-32-bytes-long",
     );
     std::env::remove_var("JWT_SECRET");
-    let secret = axum_attestation::resolve_token_secret();
+    let secret = resolve_fn();
     assert_eq!(
         secret,
         b"custom-valid-secret-key-that-is-at-least-32-bytes-long"
@@ -132,7 +163,7 @@ fn test_resolve_token_secret_configured_and_fallback_behavior() {
         "JWT_SECRET",
         "fallback-valid-secret-key-at-least-32-bytes-long",
     );
-    let secret_fallback = axum_attestation::resolve_token_secret();
+    let secret_fallback = resolve_fn();
     assert_eq!(
         secret_fallback,
         b"fallback-valid-secret-key-at-least-32-bytes-long"
@@ -141,8 +172,8 @@ fn test_resolve_token_secret_configured_and_fallback_behavior() {
     // 3. Both unset -> generates random 32-byte ephemeral key through resolve_token_secret
     std::env::remove_var("AUTHKESTRA_TOKEN_SECRET");
     std::env::remove_var("JWT_SECRET");
-    let key1 = axum_attestation::resolve_token_secret();
-    let key2 = axum_attestation::resolve_token_secret();
+    let key1 = resolve_fn();
+    let key2 = resolve_fn();
     assert_eq!(key1.len(), 32);
     assert_eq!(key2.len(), 32);
     assert_ne!(key1, key2);
@@ -152,4 +183,46 @@ fn test_resolve_token_secret_configured_and_fallback_behavior() {
     // Clean up env vars after test
     std::env::remove_var("AUTHKESTRA_TOKEN_SECRET");
     std::env::remove_var("JWT_SECRET");
+}
+
+/// Tests that resolve_token_secret selects valid configured keys, falls back to secondary valid key when primary is short,
+/// and falls back to random 32-byte ephemeral key when neither is valid, across all runnable examples.
+#[test]
+fn test_resolve_token_secret_configured_and_fallback_behavior() {
+    let _lock = ENV_LOCK.lock().unwrap();
+
+    let resolvers: [(&str, SecretResolver); 10] = [
+        ("axum_attestation", axum_attestation::resolve_token_secret),
+        ("actix_attestation", actix_attestation::resolve_token_secret),
+        ("axum_op_server", axum_op_server::resolve_token_secret),
+        ("actix_op_server", actix_op_server::resolve_token_secret),
+        (
+            "axum_oauth_stateless",
+            axum_oauth_stateless::resolve_token_secret,
+        ),
+        (
+            "actix_oauth_stateless",
+            actix_oauth_stateless::resolve_token_secret,
+        ),
+        (
+            "axum_op_server_custom_grant",
+            axum_op_server_custom_grant::resolve_token_secret,
+        ),
+        (
+            "actix_op_server_custom_grant",
+            actix_op_server_custom_grant::resolve_token_secret,
+        ),
+        (
+            "axum_op_server_sqlx",
+            axum_op_server_sqlx::resolve_token_secret,
+        ),
+        (
+            "actix_op_server_sqlx",
+            actix_op_server_sqlx::resolve_token_secret,
+        ),
+    ];
+
+    for (_name, resolver) in resolvers {
+        assert_token_secret_resolver_behavior(resolver);
+    }
 }
