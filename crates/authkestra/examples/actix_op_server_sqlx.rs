@@ -51,10 +51,8 @@ async fn main() -> std::io::Result<()> {
 
     // The token manager's `iss` claim must equal `OpConfig::issuer` below, or
     // relying parties will reject every id_token this OP mints.
-    let token_manager = Arc::new(TokenManager::new(
-        b"my-super-secret-key-that-is-32bytes-long",
-        Some(issuer.clone()),
-    ));
+    let token_secret = resolve_token_secret();
+    let token_manager = Arc::new(TokenManager::new(&token_secret, Some(issuer.clone())));
 
     // Create a SQLite connection pool (in-memory for the example, but can be a file path).
     // Capped to a single connection: SQLite's `:memory:` URI gives every
@@ -156,4 +154,31 @@ fn port_from_env() -> u16 {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080)
+}
+
+/// Resolves the token signing secret dynamically: checks `AUTHKESTRA_TOKEN_SECRET` then
+/// `JWT_SECRET` for the first valid secret of at least 32 bytes, falling back to a securely
+/// generated random 32-byte secret at startup so no static source literal can forge tokens (CWE-321).
+pub fn resolve_token_secret() -> Vec<u8> {
+    for var_name in ["AUTHKESTRA_TOKEN_SECRET", "JWT_SECRET"] {
+        if let Ok(val) = std::env::var(var_name) {
+            let bytes = val.into_bytes();
+            if bytes.len() >= 32 {
+                tracing::info!(
+                    var = var_name,
+                    "Using token signing secret from environment variable"
+                );
+                return bytes;
+            }
+            tracing::warn!(
+                var = var_name,
+                "Configured token secret from environment is shorter than 32 bytes; checking fallback or ephemeral key"
+            );
+        }
+    }
+    tracing::info!("Generating random 32-byte secret for example token signing");
+    let mut key = vec![0u8; 32];
+    use rand::RngCore;
+    rand::thread_rng().fill_bytes(&mut key);
+    key
 }
