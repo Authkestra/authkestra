@@ -306,7 +306,6 @@ where
         Ok(result) => {
             tracing::info!(
                 approval_id = %approval_id,
-                execution_token = %result.execution_token,
                 "step-up challenge approved and execution token minted"
             );
             (StatusCode::OK, Json(result)).into_response()

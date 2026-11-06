@@ -77,8 +77,6 @@ impl DeviceFlow {
             ))
         })?;
 
-        println!("Raw device authorization response body: {response_text}");
-
         serde_json::from_str::<DeviceAuthorizationResponse>(&response_text).map_err(|e| {
             AuthError::Provider(format!(
                 "Failed to parse device authorization response: {e}"

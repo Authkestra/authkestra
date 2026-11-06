@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for session cookies.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SessionConfig {
     /// The name of the session cookie.
     pub cookie_name: String,
@@ -22,6 +22,20 @@ pub struct SessionConfig {
     /// Key used to encrypt intermediate OAuth state cookies.
     /// Must be 32 bytes for AES-256-GCM.
     pub state_encryption_key: [u8; 32],
+}
+
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("cookie_name", &self.cookie_name)
+            .field("secure", &self.secure)
+            .field("http_only", &self.http_only)
+            .field("same_site", &self.same_site)
+            .field("path", &self.path)
+            .field("max_age", &self.max_age)
+            .field("state_encryption_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl Default for SessionConfig {
@@ -98,5 +112,19 @@ impl Session {
             identity,
             expires_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_config_debug_redacts_state_encryption_key() {
+        let mut config = SessionConfig::default();
+        config.state_encryption_key = [0x42; 32];
+        let debug_output = format!("{config:?}");
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains("66"));
     }
 }

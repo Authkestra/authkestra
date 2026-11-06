@@ -102,7 +102,7 @@ where
                 e
             })?;
 
-        tracing::info!(session_id = %session.id, user_id = %session.identity.external_id, "successfully extracted AuthSession");
+        tracing::info!(user_id = %session.identity.external_id, "successfully extracted AuthSession");
         Ok(AuthSession(session))
     }
 }
