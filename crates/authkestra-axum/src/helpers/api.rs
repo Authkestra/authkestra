@@ -46,7 +46,7 @@ const STATE_COOKIE: &str = "ak_state";
 
 /// Helper to initiate the OAuth2 login flow.
 ///
-/// This generates the authorization URL and sets a CSRF state cookie.
+/// This generates the authorization URL with PKCE challenge and sets an encrypted CSRF state cookie.
 pub fn initiate_oauth_login(
     flow: &dyn ErasedOAuthFlow,
     cookies: &Cookies,
@@ -346,6 +346,8 @@ pub async fn logout(
     };
     Ok(Redirect::to(target))
 }
+
+/// Axum request handler to initiate an OAuth2 login flow for the named provider.
 pub async fn axum_login_handler<AppState, S, T>(
     Path(provider): Path<String>,
     axum::extract::State(state): axum::extract::State<AppState>,
@@ -388,6 +390,7 @@ where
     Ok(redirect)
 }
 
+/// Axum request handler to finalize an OAuth2 login callback and establish a server-side session.
 #[cfg(feature = "session")]
 pub async fn axum_callback_handler<AppState, S, T>(
     Path(provider): Path<String>,
@@ -434,6 +437,7 @@ where
     })
 }
 
+/// Axum request handler to finalize an OAuth2 login callback and issue a stateless JWT.
 #[cfg(feature = "token")]
 pub async fn axum_callback_handler_stateless<AppState, S, T>(
     Path(provider): Path<String>,
@@ -480,6 +484,7 @@ where
     })
 }
 
+/// Axum request handler to log out a session and clear the session cookie.
 #[cfg(feature = "session")]
 pub async fn axum_logout_handler<AppState, S, T>(
     axum::extract::State(state): axum::extract::State<AppState>,

@@ -300,6 +300,8 @@ pub async fn handle_oauth_callback_erased(
         .cookie(remove_cookie)
         .finish())
 }
+
+/// Actix request handler to initiate an OAuth2 login flow for the named provider.
 pub async fn actix_login_handler<S, T>(
     path: web::Path<String>,
     authkestra: web::Data<Engine<S, T>>,
@@ -327,6 +329,7 @@ pub async fn actix_login_handler<S, T>(
     )
 }
 
+/// Actix request handler to finalize an OAuth2 login callback and establish a server-side session.
 #[cfg(feature = "session")]
 pub async fn actix_callback_handler<S, T>(
     req: HttpRequest,
@@ -360,6 +363,7 @@ where
     Ok(response)
 }
 
+/// Actix request handler to log out a session and clear the session cookie.
 #[cfg(feature = "session")]
 pub async fn actix_logout_handler<S, T>(
     req: HttpRequest,
@@ -492,6 +496,7 @@ where
         .await
 }
 
+/// Actix request handler to finalize an OAuth2 login callback and issue a stateless JWT.
 #[cfg(feature = "token")]
 pub async fn actix_callback_handler_stateless<S, T>(
     req: HttpRequest,
