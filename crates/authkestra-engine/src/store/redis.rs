@@ -50,9 +50,9 @@ impl RedisStore {
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for RedisStore {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn get(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "loading from redis store");
+        tracing::debug!("loading from redis store");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -79,7 +79,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for Red
         }
     }
 
-    #[tracing::instrument(skip(self, value), fields(key = %key))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn set(&self, key: &str, value: T, ttl: Duration) -> Result<(), StoreError> {
         tracing::debug!("saving to redis store");
         let mut conn = self
@@ -113,9 +113,9 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for Red
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
-        tracing::debug!(key = %key, "deleting from redis store");
+        tracing::debug!("deleting from redis store");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -138,14 +138,14 @@ use crate::store::{ttl_ceil_secs, AtomicConsume, AtomicDecrement, AtomicInsert, 
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicInsert<T> for RedisStore {
-    #[tracing::instrument(skip(self, value))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn insert_if_absent(
         &self,
         key: &str,
         value: T,
         ttl: Duration,
     ) -> Result<bool, StoreError> {
-        tracing::debug!(key = %key, "atomically inserting into redis store if absent");
+        tracing::debug!("atomically inserting into redis store if absent");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -187,9 +187,9 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicInsert<T> fo
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicConsume<T> for RedisStore {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "atomically consuming from redis store");
+        tracing::debug!("atomically consuming from redis store");
 
         // Note: We atomically consume the primary key using a Lua script.
         // The associated index_key (if any) is not deleted here because it is not provided
@@ -238,7 +238,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicConsume<T> f
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicDecrement<T> for RedisStore {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn init_counter(&self, key: &str, value: u32, ttl: Duration) -> Result<(), StoreError> {
         let mut conn = self
             .client
@@ -262,7 +262,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicDecrement<T>
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn decrement(&self, key: &str) -> Result<Option<u32>, StoreError> {
         let mut conn = self
             .client
@@ -331,7 +331,7 @@ impl RedisStore {
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> for RedisStore {
-    #[tracing::instrument(skip(self, value), fields(key = %key, index = %index))]
+    #[tracing::instrument(skip(self, key, index, value))]
     async fn set_indexed(
         &self,
         key: &str,
@@ -375,9 +375,9 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> 
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, index))]
     async fn get_by_index(&self, index: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(index = %index, "loading by index from redis store");
+        tracing::debug!("loading by index from redis store");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()

@@ -524,8 +524,13 @@ pub async fn handle_token_with_client_cert(
         // same jti could be replayed after its record expired but before
         // `verify_dpop_proof` would independently reject it as stale. The
         // extra second guards the exact boundary instant itself.
-        let expires_at = chrono::DateTime::<Utc>::from_timestamp(verified.iat, 0)
-            .unwrap_or_else(Utc::now)
+        let iat_dt = chrono::DateTime::<Utc>::from_timestamp(verified.iat, 0).ok_or_else(|| {
+            TokenErrorResponse {
+                error: "invalid_dpop_proof".to_string(),
+                error_description: "The presented DPoP proof is invalid".to_string(),
+            }
+        })?;
+        let expires_at = iat_dt
             + chrono::Duration::seconds(crate::dpop::DPOP_PROOF_MAX_AGE_SECS)
             + chrono::Duration::seconds(1);
         match op_store
@@ -2277,6 +2282,7 @@ mod tests {
     fn issue_subject_token_multi_aud(audiences: &[&str], scope: Option<String>) -> String {
         let now = chrono::Utc::now().timestamp() as usize;
         let raw_claims = serde_json::json!({
+            "iss": "https://auth.example.com",
             "sub": "user123",
             "aud": audiences,
             "exp": now + 3600,

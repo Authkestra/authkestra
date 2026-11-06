@@ -97,12 +97,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut validation = jsonwebtoken::Validation::new(validation_config.algorithms[0]);
     validation.algorithms = validation_config.algorithms;
+    validation.validate_nbf = true;
+    let has_issuer = validation_config.issuer.is_some();
     if let Some(iss) = validation_config.issuer {
         validation.set_issuer(&[iss]);
+        validation.required_spec_claims.insert("iss".to_string());
     }
+    let has_audience = config.audience.is_some();
     if let Some(aud) = config.audience.as_deref() {
         validation.set_audience(&[aud]);
+        validation.required_spec_claims.insert("aud".to_string());
     }
+    tracing::debug!(
+        validate_nbf = validation.validate_nbf,
+        validate_issuer = has_issuer,
+        validate_audience = has_audience,
+        "Configured JWT validation claims"
+    );
 
     let state = AppState {
         jwks_cache,

@@ -77,9 +77,9 @@ impl<T> MemoryStore<T> {
 
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn get(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "loading from memory store");
+        tracing::debug!("loading from memory store");
         let mut data = self.data.lock().unwrap();
 
         if let Some(entry) = data.get(key) {
@@ -92,7 +92,7 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
         Ok(None)
     }
 
-    #[tracing::instrument(skip(self, value), fields(key = %key))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn set(&self, key: &str, value: T, ttl: Duration) -> Result<(), StoreError> {
         tracing::debug!("saving to memory store");
         let entry = StoreEntry {
@@ -103,9 +103,9 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
-        tracing::debug!(key = %key, "deleting from memory store");
+        tracing::debug!("deleting from memory store");
         self.data.lock().unwrap().remove(key);
         Ok(())
     }
@@ -114,7 +114,7 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "atomically consuming from memory store");
+        tracing::debug!("atomically consuming from memory store");
         let mut data = self.data.lock().unwrap();
         if let Some(entry) = data.remove(key) {
             if entry.is_expired() {
@@ -129,7 +129,7 @@ impl<T: Clone + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> AtomicDecrement<T> for MemoryStore<T> {
     async fn init_counter(&self, key: &str, value: u32, ttl: Duration) -> Result<(), StoreError> {
-        tracing::debug!(key = %key, value, "initialising a counter in memory store");
+        tracing::debug!(value, "initialising a counter in memory store");
         let mut counters = self.counters.lock().unwrap();
         // Opportunistic sweep, in the same spirit as `insert_if_absent`'s.
         // A counter is only ever reclaimed by a later `decrement` on its own
@@ -152,38 +152,38 @@ impl<T: Clone + Send + Sync + 'static> AtomicDecrement<T> for MemoryStore<T> {
         // atomic: two callers cannot both observe the pre-decrement value.
         let mut counters = self.counters.lock().unwrap();
         let Some(entry) = counters.get_mut(key) else {
-            tracing::debug!(key = %key, "no counter to decrement");
+            tracing::debug!("no counter to decrement");
             return Ok(None);
         };
         if entry.is_expired() {
             counters.remove(key);
-            tracing::debug!(key = %key, "counter had expired");
+            tracing::debug!("counter had expired");
             return Ok(None);
         }
         if entry.value == 0 {
             // Already spent. Reported as "no attempt available" rather than
             // `Some(0)`, so a caller can tell an authorised last attempt from
             // one that was never granted.
-            tracing::debug!(key = %key, "counter already spent");
+            tracing::debug!("counter already spent");
             return Ok(None);
         }
         entry.value -= 1;
         let remaining = entry.value;
-        tracing::debug!(key = %key, remaining, "decremented a counter");
+        tracing::debug!(remaining, "decremented a counter");
         Ok(Some(remaining))
     }
 }
 
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> AtomicInsert<T> for MemoryStore<T> {
-    #[tracing::instrument(skip(self, value))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn insert_if_absent(
         &self,
         key: &str,
         value: T,
         ttl: Duration,
     ) -> Result<bool, StoreError> {
-        tracing::debug!(key = %key, "atomically inserting into memory store if absent");
+        tracing::debug!("atomically inserting into memory store if absent");
         // Held for the whole check-then-insert: this single lock is what
         // makes the operation atomic, exactly like `consume`'s single
         // `remove` call above.
@@ -347,7 +347,7 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
     }
 
     async fn get_by_index(&self, secondary_key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(secondary_key = %secondary_key, "loading by index from memory store");
+        tracing::debug!("loading by index from memory store");
         let primary_key_opt = {
             let indices = self
                 .indices

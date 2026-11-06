@@ -215,7 +215,7 @@ pub trait PrincipalMapper: Send + Sync {
 }
 ```
 
-with a default implementation producing `User::"{provider_id}|{external_id}"`. Two things
+with a default implementation producing `User::"{encoded_provider}:{encoded_external_id}"`. Two things
 deserve maintainer attention:
 
 - **Group membership must come from the `ResourceLoader`, not from the identity.** An
