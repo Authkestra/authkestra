@@ -354,6 +354,8 @@ async fn the_strategy_validates_not_before_with_configured_leeway() {
         .unwrap()
         .as_secs();
 
+    // `TestClaims` deliberately does not expose nbf: the decoder must validate
+    // registered claims even when the application's identity type omits them.
     for (nbf, leeway, expected) in [
         (None, 0, true),
         (Some(serde_json::json!(now - 30)), 0, true),

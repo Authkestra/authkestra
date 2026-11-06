@@ -22,18 +22,21 @@ use authkestra_op::{
 };
 use std::sync::Arc;
 
+/// Handler for the JWKS endpoint.
 pub async fn actix_jwks_handler(token_manager: web::Data<Arc<TokenManager>>) -> impl Responder {
     tracing::debug!("Handling JWKS request (actix)");
     let resp = JwksResponse::new(token_manager.public_jwk());
     HttpResponse::Ok().json(resp)
 }
 
+/// Handler for the OIDC discovery endpoint.
 pub async fn actix_discovery_handler(config: web::Data<OpConfig>) -> impl Responder {
     tracing::debug!("Handling OIDC discovery request (actix)");
     let resp = OidcDiscovery::from_config(config.get_ref());
     HttpResponse::Ok().json(resp)
 }
 
+/// Handler for the authorization endpoint.
 pub async fn actix_authorize_handler(
     op_store: web::Data<Arc<dyn authkestra_op::CloneableOpStore>>,
     config: web::Data<OpConfig>,
@@ -88,6 +91,7 @@ pub async fn actix_authorize_handler(
     }
 }
 
+/// Handler for the device authorization endpoint.
 pub async fn actix_device_authorization_handler(
     http_req: HttpRequest,
     req: web::Form<DeviceAuthorizationRequest>,
@@ -201,17 +205,35 @@ pub async fn actix_token_handler(
     )
     .await
     {
-        Ok(resp) => HttpResponse::Ok().json(resp),
+        Ok(resp) => with_dpop_nonce(HttpResponse::Ok(), &*store).json(resp),
         Err(err) => {
             let status = match err.error.as_str() {
                 "invalid_client" => actix_web::http::StatusCode::UNAUTHORIZED,
                 _ => actix_web::http::StatusCode::BAD_REQUEST,
             };
-            HttpResponse::build(status).json(err)
+            with_dpop_nonce(HttpResponse::build(status), &*store).json(err)
         }
     }
 }
 
+/// Adds a fresh `DPoP-Nonce` (RFC 9449 §8.1) when the store requires DPoP
+/// nonces — on every token response, so a client always holds a current one
+/// and a `use_dpop_nonce` refusal carries the value to retry with.
+fn with_dpop_nonce(
+    mut response: actix_web::HttpResponseBuilder,
+    store: &dyn authkestra_op::OpStore,
+) -> actix_web::HttpResponseBuilder {
+    if let Some(nonces) = store.dpop_nonces() {
+        tracing::debug!("attaching a fresh DPoP-Nonce to the token response (actix)");
+        response.insert_header((
+            authkestra_engine::token::dpop_nonce::DPOP_NONCE_HEADER,
+            nonces.issue(),
+        ));
+    }
+    response
+}
+
+/// Handler for the userinfo endpoint.
 pub async fn actix_userinfo_handler(
     http_req: HttpRequest,
     config: web::Data<OpConfig>,
@@ -296,14 +318,51 @@ pub async fn actix_userinfo_handler(
     response
 }
 
+/// Handler for the device verify endpoint.
 pub async fn actix_device_verify_handler(
+    http_req: HttpRequest,
     req: web::Form<authkestra_op::handlers::device_verify::DeviceVerifyRequest>,
     op_store: web::Data<Arc<dyn authkestra_op::CloneableOpStore>>,
+    op_config: Option<web::Data<OpConfig>>,
+    session_config: Option<web::Data<authkestra_engine::SessionConfig>>,
     auth_session: Option<crate::AuthSession>,
 ) -> actix_web::HttpResponse {
     tracing::debug!("Handling OP device verify request (actix)");
-    let identity = match auth_session {
-        Some(session) => session.0.identity,
+
+    if http_req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("cross-site"))
+        .unwrap_or(false)
+    {
+        tracing::warn!("cross-site request rejected on /device/verify via Sec-Fetch-Site");
+        return actix_web::HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "access_denied",
+            "error_description": "Cross-site request rejected"
+        }));
+    }
+
+    if let (Some(origin_val), Some(cfg)) = (
+        http_req.headers().get(actix_web::http::header::ORIGIN),
+        op_config.as_ref(),
+    ) {
+        if let Ok(origin_str) = origin_val.to_str() {
+            if let Ok(issuer_url) = url::Url::parse(&cfg.issuer) {
+                let expected_origin = issuer_url.origin().ascii_serialization();
+                if !origin_str.eq_ignore_ascii_case(&expected_origin) {
+                    tracing::warn!(origin = %origin_str, expected = %expected_origin, "origin mismatch on /device/verify");
+                    return actix_web::HttpResponse::Forbidden().json(serde_json::json!({
+                        "error": "access_denied",
+                        "error_description": "Origin mismatch"
+                    }));
+                }
+            }
+        }
+    }
+
+    let session = match auth_session {
+        Some(session) => session.0,
         None => {
             tracing::info!("Unauthenticated user on /device/verify, redirecting to /login");
             let login_url = String::from("/login");
@@ -313,10 +372,24 @@ pub async fn actix_device_verify_handler(
         }
     };
 
+    if let (Some(ref csrf_token), Some(ref sess_cfg)) = (&req.csrf_token, &session_config) {
+        if !authkestra_op::handlers::device_verify::verify_csrf_token(
+            &sess_cfg.state_encryption_key,
+            &session.id,
+            csrf_token,
+        ) {
+            tracing::warn!("invalid CSRF token on /device/verify");
+            return actix_web::HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "access_denied",
+                "error_description": "Invalid CSRF token"
+            }));
+        }
+    }
+
     let mut store = op_store.get_ref().clone_op_store();
     match authkestra_op::handlers::device_verify::handle_device_verify(
         req.into_inner(),
-        identity,
+        session.identity,
         &mut *store,
     )
     .await

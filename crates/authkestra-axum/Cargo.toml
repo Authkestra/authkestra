@@ -28,6 +28,7 @@ base64 = "0.22.1"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
+url = { workspace = true }
 
 # Optional devsig integration: a tower::Layer that buffers+hashes the body ahead of axum's
 # extraction, plus a thin FromRequestParts extractor. See src/devsig.rs.
@@ -112,6 +113,10 @@ required-features = ["macros", "token"]
 [[test]]
 name = "op_integration"
 required-features = ["macros", "session", "token", "op"]
+
+[[test]]
+name = "op_dpop_nonce"
+required-features = ["op"]
 
 [[test]]
 name = "devsig_test"

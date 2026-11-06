@@ -47,6 +47,23 @@ pub async fn verify(
     jwks: &IssuerJwks,
     replay_store: &dyn ReplayStore,
 ) -> Result<DeviceIdentity, VerifyError> {
+    verify_at(request, config, jwks, replay_store, SystemTime::now()).await
+}
+
+/// [`verify`], at the time `now` instead of the system clock.
+///
+/// For a host that keeps its own clock, and for conformance: the profile v1 vectors
+/// (`conformance/devsig-profile-v1/vectors.json`) are minted at fixed timestamps and carry the
+/// `now` each one is checked at, so every implementation that runs them — this crate, a client
+/// library's verifier, a server under test — reaches the same verdict on any day. Everything
+/// else, including the order of the checks and the replay store's behaviour, is [`verify`]'s.
+pub async fn verify_at(
+    request: &SignedRequest<'_>,
+    config: &VerifierConfig,
+    jwks: &IssuerJwks,
+    replay_store: &dyn ReplayStore,
+    now: SystemTime,
+) -> Result<DeviceIdentity, VerifyError> {
     // Reported once here rather than at each rejection point inside, matching
     // how `verify_dpop_proof` reports its eleven (#353 tier 1).
     //
@@ -67,7 +84,8 @@ pub async fn verify(
     // `error.code()` carries the stable slug its own doc offers for exactly
     // this; the `Display` text goes alongside for the variants that carry
     // detail. Neither credential is logged: both are the credential.
-    let outcome = verify_inner(request, config, jwks, replay_store).await;
+    let now = unix_seconds(now);
+    let outcome = verify_inner(request, config, jwks, replay_store, now).await;
 
     match &outcome {
         Ok(identity) => tracing::debug!(
@@ -111,7 +129,21 @@ async fn verify_inner(
     config: &VerifierConfig,
     jwks: &IssuerJwks,
     replay_store: &dyn ReplayStore,
+    now: i64,
 ) -> Result<DeviceIdentity, VerifyError> {
+    // Profile v1 normalisation: an empty value is no value. An empty header is an absent
+    // credential (not a malformed one), `?` with nothing after it is no query, and a zero-length
+    // body is no body — so `qsh`/`bdh` must then be absent too (see `signature.rs`). Adapters
+    // already do the body half; doing all three here keeps every caller on one rule.
+    let request = SignedRequest {
+        signature: non_empty(request.signature),
+        attestation: non_empty(request.attestation),
+        method: request.method,
+        path: request.path,
+        query: non_empty(request.query),
+        body: request.body.filter(|b| !b.is_empty()),
+    };
+
     // --- Step 1: PRESENCE ---
     let (sig_token, att_token) = match (request.signature, request.attestation) {
         (Some(s), Some(a)) => (s, a),
@@ -119,17 +151,15 @@ async fn verify_inner(
         _ => return Err(VerifyError::MissingCredential),
     };
 
-    let now = current_unix_time();
-
     // --- Step 2: PARSE (both credentials, cheap, before any crypto) ---
     let parsed_att = attestation::parse(att_token, &config.allowed_algs)?;
-    let parsed_sig = signature::parse(sig_token, &config.allowed_algs)?;
+    let parsed_sig = signature::parse(sig_token, config.device_algs())?;
 
     // --- Step 3: ATTESTATION TRUST ---
     let att = attestation::verify_trust(&parsed_att, config, jwks, now).await?;
 
     // --- Steps 4-7: THE BINDING, REQUEST SIGNATURE, FRESHNESS, REQUEST BINDING ---
-    let sig = signature::verify_bound_and_signed(&parsed_sig, request, config, &att.jkt, now)?;
+    let sig = signature::verify_bound_and_signed(&parsed_sig, &request, config, &att.jkt, now)?;
 
     // --- Step 8: REPLAY — fails closed: a store error rejects exactly like a genuine replay,
     // never falls back to "allow". ---
@@ -180,9 +210,16 @@ async fn verify_inner(
     ))
 }
 
-fn current_unix_time() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before 1970-01-01")
-        .as_secs() as i64
+/// Returns `Some(value)` if the optional string slice is present and non-empty.
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|v| !v.is_empty())
+}
+
+/// Seconds since the Unix epoch; a time before 1970 counts as negative (and so fails every
+/// freshness window) rather than panicking.
+fn unix_seconds(now: SystemTime) -> i64 {
+    match now.duration_since(UNIX_EPOCH) {
+        Ok(since) => since.as_secs() as i64,
+        Err(before) => -(before.duration().as_secs() as i64),
+    }
 }

@@ -277,6 +277,21 @@ where
             (status, Json(err)).into_response()
         }
     };
+    with_dpop_nonce(response, &*store)
+}
+
+/// Adds a fresh `DPoP-Nonce` (RFC 9449 §8.1) when the store requires DPoP
+/// nonces — on every token response, so a client always holds a current one
+/// and a `use_dpop_nonce` refusal carries the value to retry with.
+fn with_dpop_nonce(mut response: Response, store: &dyn authkestra_op::OpStore) -> Response {
+    if let Some(nonces) = store.dpop_nonces() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&nonces.issue()) {
+            tracing::debug!("attaching a fresh DPoP-Nonce to the token response (axum)");
+            response
+                .headers_mut()
+                .insert(axum::http::HeaderName::from_static("dpop-nonce"), value);
+        }
+    }
     response
 }
 
@@ -382,6 +397,7 @@ where
 /// Handler for the device verify endpoint.
 pub async fn axum_device_verify_handler<AppState>(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     cookies: tower_cookies::Cookies,
     Form(req): Form<authkestra_op::handlers::device_verify::DeviceVerifyRequest>,
 ) -> Response
@@ -390,8 +406,47 @@ where
     Result<Arc<dyn authkestra_op::CloneableOpStore>, AxumError>: FromRef<AppState>,
     Result<Arc<dyn crate::SessionStore>, AxumError>: FromRef<AppState>,
     authkestra_engine::SessionConfig: FromRef<AppState>,
+    OpConfig: FromRef<AppState>,
 {
     tracing::debug!("Handling OP device verify request (axum)");
+
+    if headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("cross-site"))
+        .unwrap_or(false)
+    {
+        tracing::warn!("cross-site request rejected on /device/verify via Sec-Fetch-Site");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "access_denied",
+                "error_description": "Cross-site request rejected"
+            })),
+        )
+            .into_response();
+    }
+
+    let op_config = OpConfig::from_ref(&state);
+    if let Some(origin_val) = headers.get(axum::http::header::ORIGIN) {
+        if let Ok(origin_str) = origin_val.to_str() {
+            if let Ok(issuer_url) = url::Url::parse(&op_config.issuer) {
+                let expected_origin = issuer_url.origin().ascii_serialization();
+                if !origin_str.eq_ignore_ascii_case(&expected_origin) {
+                    tracing::warn!(origin = %origin_str, expected = %expected_origin, "origin mismatch on /device/verify");
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({
+                            "error": "access_denied",
+                            "error_description": "Origin mismatch"
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
     let op_store =
         match <Result<Arc<dyn authkestra_op::CloneableOpStore>, AxumError>>::from_ref(&state) {
             Ok(c) => c,
@@ -406,18 +461,36 @@ where
 
     let session_res = crate::helpers::get_session(&session_store, &session_config, &cookies).await;
 
-    let identity = match session_res {
-        Ok(s) => s.identity,
+    let session = match session_res {
+        Ok(s) => s,
         Err(e) => {
             tracing::info!(error = ?e, "Unauthenticated user on /device/verify, redirecting to /login");
             return Redirect::to("/login").into_response();
         }
     };
 
+    if let Some(ref csrf_token) = req.csrf_token {
+        if !authkestra_op::handlers::device_verify::verify_csrf_token(
+            &session_config.state_encryption_key,
+            &session.id,
+            csrf_token,
+        ) {
+            tracing::warn!("invalid CSRF token on /device/verify");
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "access_denied",
+                    "error_description": "Invalid CSRF token"
+                })),
+            )
+                .into_response();
+        }
+    }
+
     let mut store = op_store.clone_op_store();
     let response = match authkestra_op::handlers::device_verify::handle_device_verify(
         req,
-        identity,
+        session.identity,
         &mut *store,
     )
     .await

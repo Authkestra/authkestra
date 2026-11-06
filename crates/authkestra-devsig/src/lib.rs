@@ -33,6 +33,16 @@
 //! let identity = authkestra_devsig::verify(&request, &config, &jwks, &replay_store).await?;
 //! ```
 //!
+//! ## Profile v1: one wire contract, shared vectors
+//!
+//! What a request looks like and how a refusal goes out are fixed by device-signature profile
+//! v1 (`docs/rfc-014-devsig-profile-v1.md`): the `att` claim is an object with a required
+//! `status` and an optional key `role` ([`KeyRole`]), a refusal is
+//! `{"error": "<code>"}` with the status and challenge [`Refusal`] gives, and a `qsh` or `bdh`
+//! must be present exactly when the request has a query or a body. The conformance vectors in
+//! `conformance/devsig-profile-v1/` are run against [`verify_at`] by this crate's tests, and
+//! client libraries vendor the same file.
+//!
 //! ## Framework integration — lives in the adapter crates, per `AGENTS.md`
 //!
 //! Two extension points exist in `authkestra-engine` today: `AuthMethod` (roadmapped, used only
@@ -68,6 +78,7 @@ mod error;
 mod identity;
 mod jwks;
 mod jws_util;
+mod profile;
 mod replay;
 mod request;
 mod signature;
@@ -75,10 +86,15 @@ mod verify;
 
 pub use config::VerifierConfig;
 pub use error::VerifyError;
-pub use identity::DeviceIdentity;
+pub use identity::{DeviceIdentity, KeyRole};
 pub use jwks::IssuerJwks;
+pub use profile::{
+    Refusal, ATTESTATION_HEADER, DEVICE_REVOKED, INSUFFICIENT_USER_AUTHENTICATION,
+    MAX_SIGNATURE_LIFETIME, PROFILE_VERSION, RECOMMENDED_CLOCK_SKEW, REFUSAL_CONTENT_TYPE,
+    SIGNATURE_HEADER, WWW_AUTHENTICATE_SCHEME,
+};
 pub use replay::{InMemoryReplayStore, ReplayError, ReplayStore, UnavailableReplayStore};
 pub use request::SignedRequest;
-pub use verify::verify;
+pub use verify::{verify, verify_at};
 pub mod builder;
 pub use builder::{DevSig, DevSigBuilder};

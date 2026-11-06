@@ -1,7 +1,9 @@
 #![allow(unused_imports)]
 use actix_web::{cookie::Cookie, http::header, web, HttpRequest, HttpResponse};
+pub use authkestra_engine::auth::{
+    is_safe_relative_url, resolve_redirect_target, Session, SessionConfig, SessionStore,
+};
 use authkestra_engine::auth::{Identity, OAuthToken};
-pub use authkestra_engine::auth::{Session, SessionConfig, SessionStore};
 use authkestra_engine::pkce::Pkce;
 use authkestra_engine::{state::OAuth2State, Engine, ErasedOAuthFlow, OAuth2Flow};
 #[allow(unused_imports)]
@@ -89,6 +91,8 @@ where
 {
     initiate_oauth_login_erased(flow, scopes, config, success_url)
 }
+
+/// Type-erased helper to initiate the OAuth2 login flow and set a CSRF state cookie.
 pub fn initiate_oauth_login_erased(
     flow: &dyn ErasedOAuthFlow,
     scopes: &[&str],
@@ -99,7 +103,18 @@ pub fn initiate_oauth_login_erased(
     let (url, mut auth_state) = flow.initiate_login(scopes, Some(&pkce.code_challenge));
 
     auth_state.code_verifier = Some(pkce.code_verifier);
-    auth_state.success_url = success_url;
+    let safe_success_url = match success_url {
+        Some(ref u) if is_safe_relative_url(u) => success_url,
+        Some(invalid) => {
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe or invalid success_url provided in login request; ignoring"
+            );
+            None
+        }
+        None => None,
+    };
+    auth_state.success_url = safe_success_url;
 
     let encrypted = auth_state
         .encrypt(&config.state_encryption_key)
@@ -217,6 +232,7 @@ async fn finalize_callback_erased(
     Ok((identity, token, expected_state))
 }
 
+/// Type-erased helper to handle the OAuth2 callback and create a server-side session.
 #[cfg(feature = "session")]
 pub async fn handle_oauth_callback_erased(
     req: HttpRequest,
@@ -224,7 +240,7 @@ pub async fn handle_oauth_callback_erased(
     params: OAuthCallbackParams,
     store: Arc<dyn SessionStore>,
     config: SessionConfig,
-    _success_url: &str,
+    success_url: &str,
 ) -> Result<HttpResponse, actix_web::Error> {
     let (mut identity, token, expected_state) =
         finalize_callback_erased(&req, flow, &params, &config).await?;
@@ -267,9 +283,16 @@ pub async fn handle_oauth_callback_erased(
         .max_age(actix_web::cookie::time::Duration::ZERO)
         .finish();
 
-    let final_success_url = expected_state
-        .success_url
-        .unwrap_or_else(|| "/".to_string());
+    if let Some(ref invalid) = expected_state.success_url {
+        if !is_safe_relative_url(invalid) {
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe success_url found in OAuth state during callback redirect; falling back to default"
+            );
+        }
+    }
+    let final_success_url =
+        resolve_redirect_target(expected_state.success_url.as_deref(), success_url);
 
     Ok(HttpResponse::SeeOther()
         .insert_header((header::LOCATION, final_success_url))
@@ -277,6 +300,8 @@ pub async fn handle_oauth_callback_erased(
         .cookie(remove_cookie)
         .finish())
 }
+
+/// Actix request handler to initiate an OAuth2 login flow for the named provider.
 pub async fn actix_login_handler<S, T>(
     path: web::Path<String>,
     authkestra: web::Data<Engine<S, T>>,
@@ -304,6 +329,7 @@ pub async fn actix_login_handler<S, T>(
     )
 }
 
+/// Actix request handler to finalize an OAuth2 login callback and establish a server-side session.
 #[cfg(feature = "session")]
 pub async fn actix_callback_handler<S, T>(
     req: HttpRequest,
@@ -337,6 +363,7 @@ where
     Ok(response)
 }
 
+/// Actix request handler to log out a session and clear the session cookie.
 #[cfg(feature = "session")]
 pub async fn actix_logout_handler<S, T>(
     req: HttpRequest,
@@ -362,6 +389,19 @@ pub async fn logout(
     config: SessionConfig,
     redirect_to: &str,
 ) -> Result<HttpResponse, actix_web::Error> {
+    if req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("cross-site"))
+        .unwrap_or(false)
+    {
+        tracing::warn!("cross-site logout rejected via Sec-Fetch-Site");
+        return Err(actix_web::error::ErrorUnauthorized(
+            "Cross-site request rejected",
+        ));
+    }
+
     let session_id = req
         .cookie(&config.cookie_name)
         .map(|c: Cookie| c.value().to_string());
@@ -380,8 +420,15 @@ pub async fn logout(
 
     let remove_cookie = create_actix_cookie(&config, "".to_string());
 
+    let target = if is_safe_relative_url(redirect_to) {
+        redirect_to
+    } else {
+        tracing::warn!(%redirect_to, "unsafe redirect_to in logout; falling back to '/'");
+        "/"
+    };
+
     Ok(HttpResponse::SeeOther()
-        .insert_header((header::LOCATION, redirect_to))
+        .insert_header((header::LOCATION, target))
         .cookie(remove_cookie)
         .finish())
 }
@@ -451,6 +498,7 @@ where
         .await
 }
 
+/// Actix request handler to finalize an OAuth2 login callback and issue a stateless JWT.
 #[cfg(feature = "token")]
 pub async fn actix_callback_handler_stateless<S, T>(
     req: HttpRequest,

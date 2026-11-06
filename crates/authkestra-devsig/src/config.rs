@@ -18,9 +18,16 @@ use jsonwebtoken::Algorithm;
 pub struct VerifierConfig {
     /// Attestation `iss` values this verifier trusts.
     pub trusted_issuers: HashSet<String>,
-    /// Algorithms accepted for both the request signature and the attestation. Must be
-    /// asymmetric only — see the type-level docs above.
+    /// Algorithms accepted for the attestation and — unless [`VerifierConfig::device_algs`] is
+    /// set — for the request signature too. Must be asymmetric only — see the type-level docs
+    /// above.
     pub allowed_algs: Vec<Algorithm>,
+    /// Algorithms accepted for the request signature (the device key), when they differ from
+    /// the issuer's. `None` means "the same as `allowed_algs`", which is what
+    /// [`VerifierConfig::new`] sets, so existing configurations behave as before. Profile v1
+    /// ([`VerifierConfig::profile_v1`]) narrows the device to ES256 and EdDSA while still
+    /// trusting RS256 issuers.
+    pub device_algs: Option<Vec<Algorithm>>,
     /// Clock skew tolerance applied to both the attestation's and the signature's freshness
     /// windows.
     pub max_clock_skew: Duration,
@@ -55,10 +62,45 @@ impl VerifierConfig {
         Self {
             trusted_issuers: trusted_issuers.into_iter().map(Into::into).collect(),
             allowed_algs,
+            device_algs: None,
             max_clock_skew,
             max_signature_lifetime,
             audience: audience.into(),
         }
+    }
+
+    /// A configuration with device-signature profile v1's parameters
+    /// (`docs/rfc-014-devsig-profile-v1.md`):
+    ///
+    /// - attestations signed with ES256, EdDSA or RS256 (each with a `kid`);
+    /// - request signatures with ES256 or EdDSA (ES256 is the one every client supports);
+    /// - a clock tolerance of [`RECOMMENDED_CLOCK_SKEW`](crate::RECOMMENDED_CLOCK_SKEW) (30 s)
+    ///   and a longest signature of [`MAX_SIGNATURE_LIFETIME`](crate::MAX_SIGNATURE_LIFETIME)
+    ///   (300 s).
+    pub fn profile_v1(
+        trusted_issuers: impl IntoIterator<Item = impl Into<String>>,
+        audience: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            trusted_issuers,
+            [Algorithm::ES256, Algorithm::EdDSA, Algorithm::RS256],
+            crate::profile::RECOMMENDED_CLOCK_SKEW,
+            crate::profile::MAX_SIGNATURE_LIFETIME,
+            audience,
+        )
+        .with_device_algs([Algorithm::ES256, Algorithm::EdDSA])
+    }
+
+    /// Restricts the request signature (the device key) to `algs`, independently of the
+    /// attestation's `allowed_algs`. Symmetric algorithms are dropped, as in [`Self::new`].
+    pub fn with_device_algs(mut self, algs: impl IntoIterator<Item = Algorithm>) -> Self {
+        self.device_algs = Some(algs.into_iter().filter(|alg| !is_symmetric(*alg)).collect());
+        self
+    }
+
+    /// The algorithms accepted for the request signature.
+    pub fn device_algs(&self) -> &[Algorithm] {
+        self.device_algs.as_deref().unwrap_or(&self.allowed_algs)
     }
 }
 

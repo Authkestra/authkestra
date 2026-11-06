@@ -43,6 +43,7 @@ struct Entry {
 }
 
 impl Entry {
+    /// Returns true if the entry's age exceeds its configured TTL.
     fn is_expired(&self, now: Instant) -> bool {
         now.duration_since(self.inserted_at) >= self.ttl
     }
