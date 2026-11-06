@@ -22,18 +22,21 @@ use authkestra_op::{
 };
 use std::sync::Arc;
 
+/// Handler for the JWKS endpoint.
 pub async fn actix_jwks_handler(token_manager: web::Data<Arc<TokenManager>>) -> impl Responder {
     tracing::debug!("Handling JWKS request (actix)");
     let resp = JwksResponse::new(token_manager.public_jwk());
     HttpResponse::Ok().json(resp)
 }
 
+/// Handler for the OIDC discovery endpoint.
 pub async fn actix_discovery_handler(config: web::Data<OpConfig>) -> impl Responder {
     tracing::debug!("Handling OIDC discovery request (actix)");
     let resp = OidcDiscovery::from_config(config.get_ref());
     HttpResponse::Ok().json(resp)
 }
 
+/// Handler for the authorization endpoint.
 pub async fn actix_authorize_handler(
     op_store: web::Data<Arc<dyn authkestra_op::CloneableOpStore>>,
     config: web::Data<OpConfig>,
@@ -88,6 +91,7 @@ pub async fn actix_authorize_handler(
     }
 }
 
+/// Handler for the device authorization endpoint.
 pub async fn actix_device_authorization_handler(
     http_req: HttpRequest,
     req: web::Form<DeviceAuthorizationRequest>,
@@ -229,6 +233,7 @@ fn with_dpop_nonce(
     response
 }
 
+/// Handler for the userinfo endpoint.
 pub async fn actix_userinfo_handler(
     http_req: HttpRequest,
     config: web::Data<OpConfig>,
@@ -313,6 +318,7 @@ pub async fn actix_userinfo_handler(
     response
 }
 
+/// Handler for the device verify endpoint.
 pub async fn actix_device_verify_handler(
     req: web::Form<authkestra_op::handlers::device_verify::DeviceVerifyRequest>,
     op_store: web::Data<Arc<dyn authkestra_op::CloneableOpStore>>,

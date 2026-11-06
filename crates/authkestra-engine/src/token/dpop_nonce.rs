@@ -149,10 +149,12 @@ impl DpopNonces {
         constant_time_eq(&URL_SAFE_NO_PAD.encode(&bytes[8..]), &expected)
     }
 
+    /// Computes the time-bucket window index for the given Unix epoch timestamp.
     fn window_of(&self, now: i64) -> u64 {
         u64::try_from(now).unwrap_or(0) / self.window_secs
     }
 
+    /// Computes the truncated HMAC-SHA256 for a given time-bucket window.
     fn mac(&self, window: u64) -> [u8; MAC_LEN] {
         // INVARIANT: `new_from_slice` fails only for MACs with a fixed key size. HMAC takes
         // a key of any length (it hashes a longer one and pads a shorter one), so this
@@ -180,6 +182,7 @@ pub fn dpop_proof_nonce(compact_jws: &str) -> Option<String> {
     claims.get("nonce")?.as_str().map(str::to_owned)
 }
 
+/// Returns the current Unix epoch time in seconds, or 0 if system time is before epoch.
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

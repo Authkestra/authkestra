@@ -649,6 +649,7 @@ pub(crate) async fn authenticate_client(
     }
 }
 
+/// Handles the OAuth 2.0 Device Authorization Grant (`urn:ietf:params:oauth:grant-type:device_code`).
 #[allow(clippy::too_many_arguments)]
 async fn handle_device_code(
     req: TokenRequest,
