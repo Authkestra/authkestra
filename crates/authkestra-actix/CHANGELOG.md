@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-actix-v0.14.0...authkestra-actix-v0.15.0) - 2026-11-06
+
+### Fixed
+
+- *(telemetry)* redact credentials from tracing and prevent log injection ([#429](https://github.com/Authkestra/authkestra/pull/429))
+
 ## [0.13.3](https://github.com/Authkestra/authkestra/compare/authkestra-actix-v0.13.2...authkestra-actix-v0.13.3) - 2026-10-26
 
 ### Added
