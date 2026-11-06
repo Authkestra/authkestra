@@ -17,6 +17,26 @@ it does not depend on axum, actix, or any other web framework. Which `authkestra
 (if any) framework integrations should eventually implement against is an open question for the
 maintainer — see authkestra#137.
 
+## Profile v1 and the shared vectors
+
+The wire contract — the `att` claim (an object with `status` and an optional key `role`), the
+issuer and device algorithms, the `qsh`/`bdh` presence rule, and the refusal table (a JSON body
+`{"error": "<code>"}`, its status, and a `WWW-Authenticate: DeviceSignature` challenge on a
+`401`) — is [RFC-014, device-signature profile v1](../../docs/rfc-014-devsig-profile-v1.md).
+Its conformance vectors, [`conformance/devsig-profile-v1/vectors.json`](../../conformance/devsig-profile-v1/),
+run against [`verify_at`] in `tests/profile_v1.rs`; client libraries vendor the same file.
+
+```rust,ignore
+use authkestra_devsig::{KeyRole, Refusal, VerifierConfig};
+
+let config = VerifierConfig::profile_v1(["https://issuer.example"], "https://api.example");
+// ... after verify():
+if identity.key_role() != KeyRole::UserPresent {
+    // answer in the profile's shape, e.g. with authkestra_axum::devsig::refusal_response
+    let refusal = Refusal::insufficient_user_authentication();
+}
+```
+
 ## Usage
 
 ```rust,ignore

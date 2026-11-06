@@ -1,0 +1,1480 @@
+{
+  "generated_by": "crates/authkestra-devsig/tests/profile_v1.rs (AUTHKESTRA_UPDATE_VECTORS=1 cargo test -p authkestra-devsig --test profile_v1)",
+  "issuer_keys": [
+    {
+      "iss": "https://issuer.example",
+      "jwk": {
+        "alg": "ES256",
+        "crv": "P-256",
+        "kid": "issuer-es256-2027",
+        "kty": "EC",
+        "x": "GTy14jjk6_JDDTRq3Txw_9ExJaB9tGNj7-UDtpOdPek",
+        "y": "AtRsa7R9brK-ndVr-1Tb9TKs0-FBVKcRGFT-kTgAEdo"
+      },
+      "kid": "issuer-es256-2027"
+    },
+    {
+      "iss": "https://issuer.example",
+      "jwk": {
+        "alg": "EdDSA",
+        "crv": "Ed25519",
+        "kid": "issuer-eddsa-2027",
+        "kty": "OKP",
+        "x": "Lb7ulReMPuF0Jz0h_cb4FpU4IEqDvhgaaJOqKJGxahs"
+      },
+      "kid": "issuer-eddsa-2027"
+    },
+    {
+      "iss": "https://issuer.example",
+      "jwk": {
+        "alg": "RS256",
+        "e": "AQAB",
+        "kid": "issuer-rs256-2027",
+        "kty": "RSA",
+        "n": "--mgjYHHYTEZTdO7yjxD7z9bvEfMbNUdLs29i3Z98ZqyqPWBGzO8xyJ1MyjOiRp5zAoH2Gx1jvWrU1Z60RH0sGtuSPMzCwDwzQUAHnzaCCrLM-l2hQJ_uiGuS3iCWFiGyxQdpeAU6BqzyGSzvcFC7vvgU_oOytlCmMnmCd7CKRdfzv_CMoK0A8KHvnYHd1_6YYNUkpa32G5I72cCJZMZFdCPhGbekm6nzflpzoQ7JuRVXWEi6HwgI4X3DGZp8FnkydFh53ox94VEbW3taVixK_uB4LCKwdrX7o00UWMpQndH4hFL7AZ1IImg0ts9gBvyamD54ll0x2EHjwW4vAd6GQ"
+      },
+      "kid": "issuer-rs256-2027"
+    }
+  ],
+  "legacy_aliases": {
+    "DEVICE_REVOKED": "device_revoked",
+    "mismatch": "method_mismatch | path_mismatch | audience_mismatch | query_mismatch | body_mismatch",
+    "replay": "replay_detected"
+  },
+  "note": "Every key and credential here is a fixed TEST value that protects nothing. Run each vector with a fresh replay store seeded with replay.seen_jtis (or one that always fails when replay.store is \"unavailable\"), at the Unix time `now`.",
+  "profile": "devsig-profile-v1",
+  "refusals": [
+    {
+      "client_action": "key_lost",
+      "error": "missing_credential",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "malformed",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "bad_alg",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "untrusted_issuer",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "renew",
+      "error": "unknown_kid",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "bad_attestation",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "renew",
+      "error": "attestation_expired",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "renew",
+      "error": "device_not_active",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "key_lost",
+      "error": "bad_jwk",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "key_lost",
+      "error": "key_not_bound",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "bad_signature",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "signature_expired",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "lifetime_too_long",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "method_mismatch",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "path_mismatch",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "audience_mismatch",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "query_mismatch",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "body_mismatch",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "replay_detected",
+      "produced_by": "verifier",
+      "status": 401,
+      "www_authenticate": true
+    },
+    {
+      "client_action": "none",
+      "error": "body_too_large",
+      "produced_by": "adapter",
+      "status": 413,
+      "www_authenticate": false
+    },
+    {
+      "client_action": "revoked",
+      "error": "device_revoked",
+      "produced_by": "application",
+      "status": 403,
+      "www_authenticate": false
+    },
+    {
+      "client_action": "step_up",
+      "error": "insufficient_user_authentication",
+      "produced_by": "application",
+      "status": 401,
+      "www_authenticate": true
+    }
+  ],
+  "spec": "docs/rfc-014-devsig-profile-v1.md",
+  "vectors": [
+    {
+      "description": "A GET with no query and no body: no qsh, no bdh. att.role is absent, so the ambient key signed.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-get",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtZ2V0IiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.zIwohhwg0dsG9KjXEkpbAlTixTlxamBgxKngOWaLwtkUZo-UKEsOapwi3UBhze5zKEAgFSRXh1m7NkKGdWE_Hw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "A POST with a query and a JSON body: qsh and bdh are the hex SHA-256 of the raw query and body bytes.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-post-query-body",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": "{\"amount\":\"125.00\",\"to\":\"acct-42\"}",
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiYmRoIjoiYWUzNTc4ZTk0YjIwMjgzM2QzNzdhYTFlZTc1NzBlNjcwNmVmMWY2Yzc2MWEyYzY3YmY3N2ZhNWQ2MTMzOTYyZSIsImV4cCI6MTc5ODc2MTcxMCwiaWF0IjoxNzk4NzYxNTkwLCJqdGkiOiJqdGktYWNjZXB0LXBvc3QiLCJtdGgiOiJQT1NUIiwicHRoIjoiL3RyYW5zZmVycyIsInFzaCI6IjQwZTJmMWJkMjRlMzc3MmVhNzVlNzQ3MTEzMmFjMjJlZjVlZTMyZjU0MGNjOTk2YzRiNTkwN2U4ZGI4NGQwNDEifQ.c4kSY_xPH00xwWzhznYHRPNKO3fSRLlNqsggDcZcVpRmwOKOlIOQk_OSYE2hJg2Y1KYq8qxxdQxh2nb2NUZU4g"
+        },
+        "method": "POST",
+        "path": "/transfers",
+        "query": "dry_run=false&currency=XAF"
+      },
+      "required": true
+    },
+    {
+      "description": "pth is the path exactly as sent, percent-encoding included, without the query.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-percent-encoded-path",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtcGN0IiwibXRoIjoiR0VUIiwicHRoIjoiL2ZpbGVzL2FubnVhbCUyMHJlcG9ydC5wZGYifQ.evn1W4nU_RvyyJbwe7DVyF-5EjAW58peX46u500TTtLy0keNOsmF6lPsMVz9PM8kWnzf0wkMBKDDqHrD94l0kw"
+        },
+        "method": "GET",
+        "path": "/files/annual%20report.pdf",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "A request URL ending in a bare `?` has no query: the signature carries no qsh.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-empty-query",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtZW1wdHktcXVlcnkiLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.aUDtkWEhoaB-j39QNl2BoRmGdWOJNDS9NrYLk7R0MQgORf4S_ZHDAFd1vqb4Q5X-9MIR_0Z187QzZz-TfJS95A"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": ""
+      },
+      "required": true
+    },
+    {
+      "description": "att.role = \"user_present\": the user-present key signed; the identity's role says so.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "p0Ese_96F9YH1xnjlIgcAvv_meYjYXwtenvUkrF9Xzo",
+        "outcome": "accept",
+        "role": "user_present",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-user-present-role",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": "{\"amount\":\"125.00\",\"to\":\"acct-42\"}",
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsicm9sZSI6InVzZXJfcHJlc2VudCIsInN0YXR1cyI6ImFjdGl2ZSJ9LCJjbmYiOnsiamt0IjoicDBFc2VfOTZGOVlIMXhuamxJZ2NBdnZfbWVZallYd3RlbnZVa3JGOVh6byJ9LCJkaWQiOiJkZXYtODgyMWJjMDQiLCJleHAiOjE3OTg4NDQ0MDAsImlhdCI6MTc5ODc1ODAwMCwiaXNzIjoiaHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZSIsInN1YiI6InVzZXItN2YzYTljMTIifQ.IRJKSiKkiJgPQvwblTsVK6iaoYe40ARfJBRgxz-dgFuJGoRn5N41yJJ3lLA073haRftXV_MqRpwgRxQJNXyzwA",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImZQYU1uU1VQdHdIblY4Ulk1bm9hMS1MNGsydzdqRTJEeEpCWjV6bDBUaTQiLCJ5IjoiRGZMU1BnQmxmWWJpemZSMENCMWV4RXYwa1ExZUd4TWZOSm85OFVWbEpnQSJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiYmRoIjoiYWUzNTc4ZTk0YjIwMjgzM2QzNzdhYTFlZTc1NzBlNjcwNmVmMWY2Yzc2MWEyYzY3YmY3N2ZhNWQ2MTMzOTYyZSIsImV4cCI6MTc5ODc2MTcxMCwiaWF0IjoxNzk4NzYxNTkwLCJqdGkiOiJqdGktYWNjZXB0LXVwIiwibXRoIjoiUE9TVCIsInB0aCI6Ii90cmFuc2ZlcnMvY29uZmlybSJ9.AD30XNn_JgVc47fVYL62v_8sZ1Z7sUxbbfaZyXwr1LEkARxnlpJ39iaI5tZs9xSm8IzVERVfrvN9ySqNYgV31g"
+        },
+        "method": "POST",
+        "path": "/transfers/confirm",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation is signed EdDSA, with a kid.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-eddsa-issuer",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFZERTQSIsImtpZCI6Imlzc3Vlci1lZGRzYS0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.-xHex-fMAVLYhaOZxCU7uYeFa02PJ7QOZLScau2COY2GMqF5b7I34dI4lh7JJNWV6MGt3VeEafSeWevuWX-iAQ",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtZWRkc2EtaXNzdWVyIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.07Wa0nbTpg5HfXlsOtV0Unw2TzN25oCyJbvR96OLGHgtogwByGiT9V0L46D6wAtSdXqoI7dztBH29IpNSTvegA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation is signed RS256, with a kid.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-rs256-issuer",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJSUzI1NiIsImtpZCI6Imlzc3Vlci1yczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.sQfNL4DWTyIHT_rG1aWUJpKVWKdZVoQnnTsKKw_a6arjB24hx1CKvjayk2FmGpGnpQ8A5HsWLbtA5oqj1AMU8niIW8_j4z5MQS-1EuLJa3ipJooIUCmt4qjrRibrUzg5Wj1lUCYzOoXcjlJf4XT_ll9A4XgGamVdFCndXpSPrIZpZfQCavzt9xLCIu-X8bn7y_KkpA-wy1l6WO8N204xX_rPBDBa0O1GBeQyVAPxzoa9oEkJB04zOM5o63ml5jIh8Eo5e--opZ2sL9AbFaPqYloF0IS4Fi_9wpScBVQrKjN5JqkgK6JnHk8mdALyVfiv4-O5NJER8MnfsvhsQp0soQ",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtcnMyNTYtaXNzdWVyIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.n3haNY-6ciXvIDRxzfb9_fYZLUAiESolGHSrV8QSFdzwVrjEAqi8z2PXTmno9RMIsX8xZprwFVwJ8RFq53AHlg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "iat is 20 s in the future: within the 30 s tolerance.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-skew-within-tolerance",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzQwLCJpYXQiOjE3OTg3NjE2MjAsImp0aSI6Imp0aS1hY2NlcHQtc2tldyIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.yNiL-aUfFBdgmz7YHYgrJzF26tfFnyDlRq85DQEJu_m6MnIB48A0etoMH9KejNoGGuimhXxSk3c1MACiUKIeIA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "att carries application attributes beside status; they are surfaced, not interpreted.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kDfNnMxgfAIDUGT5Rg8poFP_clE4lEOKzJKrbb1el9Q",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-attestation-extra-attributes",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsia3ljX2xldmVsIjoyLCJyb2xlcyI6WyJjdXN0b21lciJdLCJzdGF0dXMiOiJhY3RpdmUifSwiY25mIjp7ImprdCI6ImtEZk5uTXhnZkFJRFVHVDVSZzhwb0ZQX2NsRTRsRU9LekpLcmJiMWVsOVEifSwiZGlkIjoiZGV2LTg4MjFiYzA0IiwiZXhwIjoxNzk4ODQ0NDAwLCJpYXQiOjE3OTg3NTgwMDAsImlzcyI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUiLCJzdWIiOiJ1c2VyLTdmM2E5YzEyIn0.Zabg14zWpT39xXHFn3BialxY-8UtnHrjUSxHWzVnqbWw9DonKSDFglW1j6F3KSOCp1lO9pmZ0TXF1Y7_SwSxnA",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtYXR0cnMiLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ._LXWILJYckkJCN_mQtkrTcP8d6yHgVtI9qLf3KDEQnKy_R7ShRG9FPgHFP8syjWrP8tvMNo2-ubdrTuPcCRcfg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "Only the attestation: it is public, so alone it is a bearer token.",
+      "expect": {
+        "body": {
+          "error": "missing_credential"
+        },
+        "error": "missing_credential",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"missing_credential\""
+      },
+      "id": "missing-signature",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "Only the signature: an anonymous key.",
+      "expect": {
+        "body": {
+          "error": "missing_credential"
+        },
+        "error": "missing_credential",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"missing_credential\""
+      },
+      "id": "missing-attestation",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1taXNzaW5nLWF0dGVzdGF0aW9uIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.xXCUrfwWLHcTIBBRaJ9Gh4myM75xqwerlVECWiZwVFfanIQd4wQI6FnA4HIqdYb4JTdT9GCnl1EkiYF9k96EyQ"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "An empty header is an absent credential, not a malformed one.",
+      "expect": {
+        "body": {
+          "error": "missing_credential"
+        },
+        "error": "missing_credential",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"missing_credential\""
+      },
+      "id": "empty-signature-header",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": ""
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation is not a compact JWS.",
+      "expect": {
+        "body": {
+          "error": "malformed"
+        },
+        "error": "malformed",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"malformed\""
+      },
+      "id": "malformed-attestation-two-segments",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiJ9.e30",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1tYWxmb3JtZWQtc2VnbWVudHMiLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.jDsmkVj-BfIZQCmUF70-0i5fsbMQzwdoLvMUMgWKH-PdyfBve7xYzrY9bDQbaQnKfbTv8xuFVlZs7lVKfTBKTA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "att is a key-role string instead of an object (the shape profile v1 retires).",
+      "expect": {
+        "body": {
+          "error": "malformed"
+        },
+        "error": "malformed",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"malformed\""
+      },
+      "id": "malformed-att-is-a-string",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOiJhbWJpZW50IiwiY25mIjp7ImprdCI6ImtEZk5uTXhnZkFJRFVHVDVSZzhwb0ZQX2NsRTRsRU9LekpLcmJiMWVsOVEifSwiZGlkIjoiZGV2LTg4MjFiYzA0IiwiZXhwIjoxNzk4ODQ0NDAwLCJpYXQiOjE3OTg3NTgwMDAsImlzcyI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUiLCJzdWIiOiJ1c2VyLTdmM2E5YzEyIn0.7aEbBSjZItGBaxk-wO6y9CrDwk9ngQoLoiN9SkSs_kbWFzthXZse5jD6iXylQZs0DfvBaPTHDXZAbu8FVqKQPQ",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1tYWxmb3JtZWQtYXR0LXN0cmluZyIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.27XiaNSf9jihIfc4PMbzRsJraJz9Gak09d2ddkaj3sLqkW3eyZoxu4Md_-qsaQHafhlkHjfCIrDJCIvBQ0-BLg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "status sits at the top level and att is missing (the shape profile v1 retires).",
+      "expect": {
+        "body": {
+          "error": "malformed"
+        },
+        "error": "malformed",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"malformed\""
+      },
+      "id": "malformed-top-level-status",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJjbmYiOnsiamt0Ijoia0RmTm5NeGdmQUlEVUdUNVJnOHBvRlBfY2xFNGxFT0t6SktyYmIxZWw5USJ9LCJkaWQiOiJkZXYtODgyMWJjMDQiLCJleHAiOjE3OTg4NDQ0MDAsImlhdCI6MTc5ODc1ODAwMCwiaXNzIjoiaHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZSIsInN0YXR1cyI6ImFjdGl2ZSIsInN1YiI6InVzZXItN2YzYTljMTIifQ.3JWnchXYNGF3tgQ5TyH20ZVkBDnNdIup2HjpkAWB7QNlrKlvD_PhuaiuvJz6hujcEl0x5wvkzxim1QG15_wN8A",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1tYWxmb3JtZWQtdG9wLXN0YXR1cyIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9._BPj4GL4g8rsPaSrmTFCv9p0wG8ZG5t4N-rTxWDepFEWXp0tovRQoBb8A0QvB11SpGNc1S0Q8UyHkJjsVQdH6A"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation says alg none.",
+      "expect": {
+        "body": {
+          "error": "bad_alg"
+        },
+        "error": "bad_alg",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_alg\""
+      },
+      "id": "bad-alg-none-attestation",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJub25lIiwia2lkIjoiaXNzdWVyLWVzMjU2LTIwMjcifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.bm90LWEtc2lnbmF0dXJl",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtYWxnLW5vbmUiLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.YhC-ntGYwg9FIAkc3AHcYiFxOXCtbFYdpt7Z6lI1BA01IFJmJRx8URZr4_xzO8f3Vj1k5p6acccogIfEOwh9rA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The request signature uses a symmetric algorithm.",
+      "expect": {
+        "body": {
+          "error": "bad_alg"
+        },
+        "error": "bad_alg",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_alg\""
+      },
+      "id": "bad-alg-hs256-signature",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJIUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtYWxnLWhzMjU2IiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.iPW9CzH29PT6uhzMDu9zQB17gzyc0630U6-m1LPyUG0"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The device signs RS256: profile v1 allows RS256 for issuers only.",
+      "expect": {
+        "body": {
+          "error": "bad_alg"
+        },
+        "error": "bad_alg",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_alg\""
+      },
+      "id": "bad-alg-rs256-device",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJSUzI1NiIsImp3ayI6eyJlIjoiQVFBQiIsImt0eSI6IlJTQSIsIm4iOiItLW1nallISFlURVpUZE83eWp4RDd6OWJ2RWZNYk5VZExzMjlpM1o5OFpxeXFQV0JHek84eHlKMU15ak9pUnA1ekFvSDJHeDFqdldyVTFaNjBSSDBzR3R1U1BNekN3RHd6UVVBSG56YUNDckxNLWwyaFFKX3VpR3VTM2lDV0ZpR3l4UWRwZUFVNkJxenlHU3p2Y0ZDN3Z2Z1Vfb095dGxDbU1ubUNkN0NLUmRmenZfQ01vSzBBOEtIdm5ZSGQxXzZZWU5Va3BhMzJHNUk3MmNDSlpNWkZkQ1BoR2Jla202bnpmbHB6b1E3SnVSVlhXRWk2SHdnSTRYM0RHWnA4Rm5reWRGaDUzb3g5NFZFYlczdGFWaXhLX3VCNExDS3dkclg3bzAwVVdNcFFuZEg0aEZMN0FaMUlJbWcwdHM5Z0J2eWFtRDU0bGwweDJFSGp3VzR2QWQ2R1EifX0.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtYWxnLXJzMjU2LWRldmljZSIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.Ik4833d1KRI_lkwOhUjvbHal23YW5qvp8fyaPBMVQGybK8181QngUD29IjQn0K4COFImZ3tsuHkuX9E_9t4pP96sdr5cJ0PbTj3KlYBRot6_96jnEuX4ttc12i6f_AhLIIPzFUtCt-_1OFU3cyxfLb_2qW6jGD3OLL2Ce_C0HhPfWwkZCb47Vxr-e6lEIEVkpE2_KRU33xqMVWykPo-G8gn7EWJCY0Xr9Kx32nAkiKsdD84rEhgFfzHzSLVseYdXh_4iVOgdzEPVwnXWZ9v0prZqF2YkmU7Wh2Ryff-9afqOpx7ePbYgx3ROmJg8s-_I8mvIj7crfi5tte78j9dF4g"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation names an issuer the verifier does not trust.",
+      "expect": {
+        "body": {
+          "error": "untrusted_issuer"
+        },
+        "error": "untrusted_issuer",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"untrusted_issuer\""
+      },
+      "id": "untrusted-issuer",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2V2aWwuZXhhbXBsZSIsInN1YiI6InVzZXItN2YzYTljMTIifQ.jNa6gutd5qC7cAmjw16j5ljDnL_xB3v8oly5a2TMUmlj2uQK41exDfbLQnbFWulht7Ja4J0fTICkkJs9jQx3ow",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS11bnRydXN0ZWQtaXNzdWVyIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.AWpuO_6I1HBqFLob5hIea4m5woNET3qjsNf_phca3JJRPNhO4gpUC6TU1adBY50rVXEm0dNoQB_4VFlhlTDKMw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation's kid is not in the issuer's JWKS.",
+      "expect": {
+        "body": {
+          "error": "unknown_kid"
+        },
+        "error": "unknown_kid",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"unknown_kid\""
+      },
+      "id": "unknown-kid",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI2LXJldGlyZWQiLCJ0eXAiOiJ3ZWJhbmstYXR0ZXN0K2p3cyJ9.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.tMV8VxUlUTG3sHqU97tNo8Jx95EemBPk1hfIYGyGpDCwXygu4AnfMAwVzwjclvAC5g_refFZtZar6UiPTRuYww",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS11bmtub3duLWtpZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.YEDQV6ug0dvGf6U5F8aPjeAelmGI1KjJGlAGLINiiR4FMhRHJBBkxWhTI5REp7CnnOOtay50ZWJSc-iHzKYWVg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation header has no kid: profile v1 requires one.",
+      "expect": {
+        "body": {
+          "error": "unknown_kid"
+        },
+        "error": "unknown_kid",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"unknown_kid\""
+      },
+      "id": "missing-kid",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsInR5cCI6IndlYmFuay1hdHRlc3QrandzIn0.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.ThRfIo_pO2LWLEZnftq6Eeck4EKy-1iFYtQrxkIMs6dy33ESHb82KDEeEZ_OoAzGKbDHCfHdiWJlKiZc8vHS6w",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1taXNzaW5nLWtpZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.EKAoYwNMb7f_nNLW0UrmP1RYrYLdMqfXxvDxRmKBLjXquXPbJe9asx_On_ouIRQ-yM2nXvvIRWnMoHWsrOj-7Q"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation claims a trusted kid but another key signed it.",
+      "expect": {
+        "body": {
+          "error": "bad_attestation"
+        },
+        "error": "bad_attestation",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_attestation\""
+      },
+      "id": "bad-attestation-signature",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.37jlFlLG2ic3paU88-NEngWkNy4hifO9fl3F9WvYqWidOdaQ7yXdUcR0LIYFHOko9ESr-tSPfFTEkvG2I1LS2Q",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtYXR0ZXN0YXRpb24iLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.ZXFuMiYL7OoEtM9dDb_wVmTO5L8ym5RWQFQgGwO7QIgXAu0Lp2IdMjCAlWzm_fcF7-twVWSpGzn5LvGZ8UiuHw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The attestation expired an hour ago.",
+      "expect": {
+        "body": {
+          "error": "attestation_expired"
+        },
+        "error": "attestation_expired",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"attestation_expired\""
+      },
+      "id": "attestation-expired",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODc1ODAwMCwiaWF0IjoxNzk4NjcxNjAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.4IZsVCXoj0FJa4Tn-x0gKAf57YOIHVrbLsnyw4aonw9qcK083caO3xM9DpWTT6bUN0pC8K-LDbXS373ITAKCww",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hdHQtZXhwaXJlZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.pVIxEFiihq_9Dn6E6LipEWAX7ccGrxJYmycbAy0cxkbnPkZX4dLmw9R448QNKAty7FWTiET7fQqpa0GlHzPXIg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "att.status is \"suspended\".",
+      "expect": {
+        "body": {
+          "error": "device_not_active"
+        },
+        "error": "device_not_active",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"device_not_active\""
+      },
+      "id": "device-not-active",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoic3VzcGVuZGVkIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.yH36laOnu9lzwuowLzphzgFu0W2TZELZnBoYsRjFDYkIn_oDAV8z8lMxCREiTvDycueGaJHuNNwI9tE8og6WQw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1ub3QtYWN0aXZlIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.WI-hE7JY5PnemJPOw0mONd-gItMn3VXZz_Xx2P9DvBHRyWuHfazOhbX2jWCw_SvVWls2iM2yJkpqjP193-tX6Q"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "att has no status: fail closed.",
+      "expect": {
+        "body": {
+          "error": "device_not_active"
+        },
+        "error": "device_not_active",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"device_not_active\""
+      },
+      "id": "device-status-missing",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsicm9sZSI6ImFtYmllbnQifSwiY25mIjp7ImprdCI6ImtEZk5uTXhnZkFJRFVHVDVSZzhwb0ZQX2NsRTRsRU9LekpLcmJiMWVsOVEifSwiZGlkIjoiZGV2LTg4MjFiYzA0IiwiZXhwIjoxNzk4ODQ0NDAwLCJpYXQiOjE3OTg3NTgwMDAsImlzcyI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUiLCJzdWIiOiJ1c2VyLTdmM2E5YzEyIn0.xLqzk6y4tlscMziamhfVT_ph7NNQ1-QxXUdiNQYPrYEfnGWJvF39tGzUhyiPuKrMxMesbj3DJZU05UdN9QALDg",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1zdGF0dXMtbWlzc2luZyIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.Oz49DA9XXf5sGoPKCIFtJDDnYYX3F8kcHXW64co4ff23YSy9IMBYUOv_xHcGiXBFsyFxRNvQslcR5Iu89-B-cA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "THE critical case: the victim's genuine attestation with a request genuinely signed by the attacker's own key. Both signatures verify; only the thumbprint check refuses.",
+      "expect": {
+        "body": {
+          "error": "key_not_bound"
+        },
+        "error": "key_not_bound",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"key_not_bound\""
+      },
+      "id": "key-not-bound",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6Ik9EODRDTWpsdDRGZTczN19TMnlOVWV2ZlhCM3NRU1lEQnFscF8wOENvd00iLCJ5IjoiQzRfdlpQVDI2ZG5FaGk3TS1sSWkwa0swcWNncDZWM21nNURKZEZlem9MQSJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1rZXktbm90LWJvdW5kIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.tEELkcpgmRUsQahyB2wsv73TY62e-SCTMUGl2c6jccPsEQSCaiM3g3b7vA4gBi0S21RpBtDzW8pyfgipSdDwwg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The embedded jwk carries a private member d.",
+      "expect": {
+        "body": {
+          "error": "bad_jwk"
+        },
+        "error": "bad_jwk",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_jwk\""
+      },
+      "id": "bad-jwk-private-member",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImQiOiJCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjIiwia3R5IjoiRUMiLCJ4IjoiYXZoME43WDFfU0hLVVVNQnVNUE5fdk1uUHFvM2lCNG4wX0daeDZnZHhqbyIsInkiOiJWUnVLLTgwczN3aDdueXJjQ1JvSk5yUVdwVWhHQUt0b05LMm9Fa1lyTjAwIn19.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtandrLWQiLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.xY_5OB3tGD700FYEZrzYJK4DcT4ZYYRziT20L5TzZRBm6lb0GpqTbFwe4jBEYyY6_310ycyMod1kydPrE9yV3g"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The signature header has no jwk.",
+      "expect": {
+        "body": {
+          "error": "bad_jwk"
+        },
+        "error": "bad_jwk",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_jwk\""
+      },
+      "id": "bad-jwk-missing",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiJ9.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtandrLW1pc3NpbmciLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.kdG3926hc3k8wtixqHTgUN8gAbBTYWBzcFwKwZA6q8L6Si9b6BWGiwaPPNCqGzmrkxvfDm8n1XIAbogShbVDGQ"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The claims were changed after signing (another jti), the signature kept.",
+      "expect": {
+        "body": {
+          "error": "bad_signature"
+        },
+        "error": "bad_signature",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"bad_signature\""
+      },
+      "id": "bad-signature",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1iYWQtc2lnbmF0dXJlLWVkaXRlZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.ZHTa3MgamzFB3CFPsPc-Eb7Rwq9BcgSEHx1hzRGGPdVnqKMTkOZp6geB_3n9VK8n7Z35jLQSTK_cVECbCu3sew"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "exp passed 90 s ago, beyond the 30 s tolerance.",
+      "expect": {
+        "body": {
+          "error": "signature_expired"
+        },
+        "error": "signature_expired",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"signature_expired\""
+      },
+      "id": "signature-expired",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNTEwLCJpYXQiOjE3OTg3NjEzOTAsImp0aSI6Imp0aS1zaWctZXhwaXJlZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.TyJfiNSxdN0GbcAN7PujzlDU82mxXfhKMZ4LMkxcTVFcZFuglC4TMj47RyO6RAOghQKhkWbbvqJzaqLvc-m85Q"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "iat is 120 s ahead, beyond the 30 s tolerance.",
+      "expect": {
+        "body": {
+          "error": "signature_expired"
+        },
+        "error": "signature_expired",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"signature_expired\""
+      },
+      "id": "signature-from-the-future",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxODQwLCJpYXQiOjE3OTg3NjE3MjAsImp0aSI6Imp0aS1zaWctZnV0dXJlIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.WGxZ3lzrNBJATpEZPloTUsD0NvUuLPRYn4l8zkAF-HhSmqgqQnuEXxCMkrbhOzUvJoFZInxpIQkKyb86A_AYdw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "exp - iat is one hour: profile v1 allows 300 s.",
+      "expect": {
+        "body": {
+          "error": "lifetime_too_long"
+        },
+        "error": "lifetime_too_long",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"lifetime_too_long\""
+      },
+      "id": "lifetime-too-long",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzY1MTkwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1saWZldGltZSIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.v3ckXuzQO7-Dswi9Bm_zgnMcGBZThPtXpMhDk0HAvehovwGMH368I1Tn50-BXMWd1XuAeeFEEPICZPSGNo9kGg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "Signed for DELETE, sent as GET.",
+      "expect": {
+        "body": {
+          "error": "method_mismatch"
+        },
+        "error": "method_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"method_mismatch\""
+      },
+      "id": "method-mismatch",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1tZXRob2QiLCJtdGgiOiJERUxFVEUiLCJwdGgiOiIvYWNjb3VudHMifQ.fH5tDjQgEuPQZAfQIQlAr1gDUuo1VLJ0GkdJBof2yTTTQqy3YSrv879USU2Zj0-CZ4WvTNoTJWG5uOOD4-5HjQ"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "Signed for /accounts/1, sent to /accounts/2.",
+      "expect": {
+        "body": {
+          "error": "path_mismatch"
+        },
+        "error": "path_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"path_mismatch\""
+      },
+      "id": "path-mismatch",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1wYXRoIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzLzEifQ.Sxx_fbhVzdPblRSJBrH2qAv97ti4lG-n-dOz_ifXemEOlsYhMXObU5T88B1iJoNF6A86HW-rvI3ravZz37SdQw"
+        },
+        "method": "GET",
+        "path": "/accounts/2",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "Signed for another API.",
+      "expect": {
+        "body": {
+          "error": "audience_mismatch"
+        },
+        "error": "audience_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"audience_mismatch\""
+      },
+      "id": "audience-mismatch",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL290aGVyLWFwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hdWQiLCJtdGgiOiJHRVQiLCJwdGgiOiIvYWNjb3VudHMifQ.W_IrTPvqUtPlpVkhxbgGOlBF9tAx1ubvRb3hJthnMKJ9gzmypXe2RYJsdfxZSY4EslKZmXwnItgXZ78CqBvO3Q"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The query was changed after signing.",
+      "expect": {
+        "body": {
+          "error": "query_mismatch"
+        },
+        "error": "query_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"query_mismatch\""
+      },
+      "id": "query-altered",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1xdWVyeS1hbHRlcmVkIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIiwicXNoIjoiOWMyMWQ5ZTY0M2UxZGNiZjQ3ZjdiODFmOTdkNWE5MTk2YzI5MGU2ODNjZjE1NGRhZjg4NTFjYzI1MDAyZTdlYiJ9.q5KUEItw59UBjuJfwO_2QHMhcx52qR4xY8Kwgs_LlCHqwRbThhJMDgPzO76jIXxwdbwwUWl6gTG4VKSu_jdvVw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": "limit=1000"
+      },
+      "required": true
+    },
+    {
+      "description": "The request has a query but the signature has no qsh.",
+      "expect": {
+        "body": {
+          "error": "query_mismatch"
+        },
+        "error": "query_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"query_mismatch\""
+      },
+      "id": "query-unsigned",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1xdWVyeS11bnNpZ25lZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.uzrpntLXc4Tnp71d86N_b2jav_jCU9wscKCHO4pTtRNcNzoxXVjqqs68b5pT8YEhmus38r6zeG_bWM2sPetwqA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": "limit=10"
+      },
+      "required": true
+    },
+    {
+      "description": "The signature has a qsh but the request has no query: the query was stripped.",
+      "expect": {
+        "body": {
+          "error": "query_mismatch"
+        },
+        "error": "query_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"query_mismatch\""
+      },
+      "id": "query-stray-qsh",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1xdWVyeS1zdHJheSIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyIsInFzaCI6IjljMjFkOWU2NDNlMWRjYmY0N2Y3YjgxZjk3ZDVhOTE5NmMyOTBlNjgzY2YxNTRkYWY4ODUxY2MyNTAwMmU3ZWIifQ.7JQnVDts4lz8zNDYjA3_73JOzkULF4gRH6BWmYaOZjkTY0XlGizWSate-bHg8WUMWruhN0ZnwcCy_3sCDsuGgg"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The body was changed after signing.",
+      "expect": {
+        "body": {
+          "error": "body_mismatch"
+        },
+        "error": "body_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"body_mismatch\""
+      },
+      "id": "body-altered",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": "{\"amount\":\"999999.00\",\"to\":\"acct-666\"}",
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiYmRoIjoiYWUzNTc4ZTk0YjIwMjgzM2QzNzdhYTFlZTc1NzBlNjcwNmVmMWY2Yzc2MWEyYzY3YmY3N2ZhNWQ2MTMzOTYyZSIsImV4cCI6MTc5ODc2MTcxMCwiaWF0IjoxNzk4NzYxNTkwLCJqdGkiOiJqdGktYm9keS1hbHRlcmVkIiwibXRoIjoiUE9TVCIsInB0aCI6Ii90cmFuc2ZlcnMifQ.Vw7ILMF-gGe74ydI3H64lTEUNdwhR0oX64A61QumNG80SWCsSJTjov0E6PkaakOneyrP7sGLx1lUnr0jdNxCSA"
+        },
+        "method": "POST",
+        "path": "/transfers",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The request has a body but the signature has no bdh.",
+      "expect": {
+        "body": {
+          "error": "body_mismatch"
+        },
+        "error": "body_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"body_mismatch\""
+      },
+      "id": "body-unsigned",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": "{\"amount\":\"125.00\",\"to\":\"acct-42\"}",
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1ib2R5LXVuc2lnbmVkIiwibXRoIjoiUE9TVCIsInB0aCI6Ii90cmFuc2ZlcnMifQ.7aOtBhVKmq8YZ1mYXxmHGsOsNxtVLNmUV9a6cLLrWJZgmAi0gQ06LzVXVajPBCWM_W-BUj_R8KGDFQPCzzIvkw"
+        },
+        "method": "POST",
+        "path": "/transfers",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The signature has a bdh but the request has no body: the body was stripped, so a signed write would replay as an empty one.",
+      "expect": {
+        "body": {
+          "error": "body_mismatch"
+        },
+        "error": "body_mismatch",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"body_mismatch\""
+      },
+      "id": "body-stray-bdh",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiYmRoIjoiYWUzNTc4ZTk0YjIwMjgzM2QzNzdhYTFlZTc1NzBlNjcwNmVmMWY2Yzc2MWEyYzY3YmY3N2ZhNWQ2MTMzOTYyZSIsImV4cCI6MTc5ODc2MTcxMCwiaWF0IjoxNzk4NzYxNTkwLCJqdGkiOiJqdGktYm9keS1zdHJheSIsIm10aCI6IlBPU1QiLCJwdGgiOiIvdHJhbnNmZXJzIn0.WTVMrRuiAz3XTCbsOWVM9_fiztoHSfbDeaUhzs-fkRGVGmrvE3mL0ZCH3mraEDUy_GdpOiLkdmMBiUob-6ZnCg"
+        },
+        "method": "POST",
+        "path": "/transfers",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The jti was already used.",
+      "expect": {
+        "body": {
+          "error": "replay_detected"
+        },
+        "error": "replay_detected",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"replay_detected\""
+      },
+      "id": "replay",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [
+          "jti-replayed"
+        ],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1yZXBsYXllZCIsIm10aCI6IkdFVCIsInB0aCI6Ii9hY2NvdW50cyJ9.FkasaapOEAYwsha91-ZRruU2bmW2iVhOuRH6dnOTAqiYO8_gty7mESVlomfB55Hm5wSOG5FRGUItitLlYv8UfA"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "The replay store cannot be reached: fail closed, exactly like a replay.",
+      "expect": {
+        "body": {
+          "error": "replay_detected"
+        },
+        "error": "replay_detected",
+        "outcome": "refuse",
+        "status": 401,
+        "www_authenticate": "DeviceSignature error=\"replay_detected\""
+      },
+      "id": "replay-store-unavailable",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "unavailable"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw",
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1zdG9yZS1kb3duIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.NsLs1NW6HdWscHJMxculvGFVtUfAAasUyBabnyh03134vB9tKFaaGd4CtoR6qQAGjGJlv0TcPvBvvXmMxoTTOw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": true
+    },
+    {
+      "description": "OPTIONAL: the device key is Ed25519 (EdDSA). Clients sign ES256; a verifier MAY accept EdDSA device keys.",
+      "expect": {
+        "did": "dev-8821bc04",
+        "jkt": "kmcJ3Cs5DdhINNEkJDFFXTiYR_kER7MiG3i2nFhQhus",
+        "outcome": "accept",
+        "role": "ambient",
+        "sub": "user-7f3a9c12"
+      },
+      "id": "accept-eddsa-device",
+      "now": 1798761600,
+      "replay": {
+        "seen_jtis": [],
+        "store": "available"
+      },
+      "request": {
+        "body": null,
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrbWNKM0NzNURkaElOTkVrSkRGRlhUaVlSX2tFUjdNaUczaTJuRmhRaHVzIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.n8Xru2HYu75V8G7jAuVIevRKA6klUdgYd91IZuCGUBzD7ri-mOWusMQTz-gEd6cksi8gWFNKkdjwzNi4MRulNg",
+          "X-Signature": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6ImZwNThaQVBaZ1I4aDlpbTJUTGFjYWpHOWkxa3EzamdCeVcyeWUxc3NmSGcifX0.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1hY2NlcHQtZWRkc2EtZGV2aWNlIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.sjORlYn-QXSUWmgxTGdpLbGgVQ4qy6CuD1KlCzDgvHV2Ef2l7Y4Au4To6XI4GqaH2nIYuwHS2EP-5s4PqoZpBw"
+        },
+        "method": "GET",
+        "path": "/accounts",
+        "query": null
+      },
+      "required": false
+    }
+  ],
+  "verifier": {
+    "attestation_algs": [
+      "ES256",
+      "EdDSA",
+      "RS256"
+    ],
+    "attestation_header": "X-Attestation",
+    "audience": "https://api.example",
+    "clock_skew_secs": 30,
+    "device_algs": [
+      "ES256",
+      "EdDSA"
+    ],
+    "max_signature_lifetime_secs": 300,
+    "signature_header": "X-Signature",
+    "trusted_issuers": [
+      "https://issuer.example"
+    ]
+  }
+}

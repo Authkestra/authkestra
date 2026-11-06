@@ -278,6 +278,7 @@ fn curve_is_consistent(algorithm: &AlgorithmParameters) -> bool {
     }
 }
 
+/// Computes the SHA-256 hash of the input slice and formats it as a lowercase hex string.
 fn hex_sha256(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
