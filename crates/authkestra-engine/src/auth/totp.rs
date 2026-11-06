@@ -99,13 +99,10 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
         // A user can only have one TOTP secret at a time, so use a deterministic ID.
         let credential_id = format!("totp:{}", user_id);
 
-        // Snapshot the TOTP credentials that already exist, so they can be removed by id once
-        // the new secret is safely stored. Deleting first would be simpler, but it opens a
-        // window on delete-success-then-save-failure where the user has no TOTP secret at all
-        // — and since enrolment normally requires an authenticated session, a user locked out
-        // that way may not be able to reach the retry. Saving first degrades instead to the
-        // pre-existing behaviour (the old secret keeps working), and a retry converges because
-        // the new secret is written under a stable id that upserts.
+        // Snapshot the TOTP credentials that already exist. Superseded credentials under
+        // non-deterministic identifiers (stale_ids) must be retired before saving the new
+        // credential so that a retirement failure does not leave an existing usable secret
+        // replaced by a new secret that is never returned.
         let existing = self.store.get_credentials(user_id, "totp").await?;
         let mut stale_ids = Vec::new();
         let mut unidentified = 0usize;
@@ -143,6 +140,47 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
             replacing = false;
         }
 
+        // Retire superseded secrets before saving the new secret. If retirement fails,
+        // the existing usable secret (if any) is preserved intact and no new unreturned secret is written.
+        for stale_id in &stale_ids {
+            match self
+                .store
+                .delete_credential(user_id, "totp", stale_id)
+                .await
+            {
+                Ok(true) => {
+                    tracing::debug!(user_id = %user_id, credential_id = %stale_id, "Deleted superseded TOTP credential");
+                }
+                Ok(false) => {
+                    tracing::error!(
+                        user_id = %user_id,
+                        credential_id = %stale_id,
+                        "Failed to delete superseded TOTP credential: not found"
+                    );
+                    return Err(AuthError::Internal(format!(
+                        "Failed to retire superseded TOTP credential {stale_id}"
+                    )));
+                }
+                Err(AuthError::Unsupported) => {
+                    tracing::error!(
+                        user_id = %user_id,
+                        count = stale_ids.len(),
+                        "Store does not support delete_credential; cannot safely retire superseded TOTP secrets"
+                    );
+                    return Err(AuthError::Unsupported);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        user_id = %user_id,
+                        credential_id = %stale_id,
+                        "Failed to delete superseded TOTP credential"
+                    );
+                    return Err(e);
+                }
+            }
+        }
+
         let val = serde_json::json!({
             "credential_id": credential_id,
             "secret": secret_b32.clone(),
@@ -153,7 +191,7 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
             .await?;
 
         // `CredentialStore::save_credential` is documented to replace a credential stored under
-        // the same id, which is what makes the save above safe to do first. Not every store
+        // the same id, which is what makes the save above safe to do. Not every store
         // honours that, and one that appends leaves two secrets sharing the deterministic id —
         // indistinguishable to `delete_credential`, so the only way to retire the old one is to
         // drop the id and write the secret again. That reintroduces the window this ordering
@@ -197,47 +235,6 @@ impl<S: CredentialStore> TotpAuthMethod<S> {
                         return Err(AuthError::Unsupported);
                     }
                     Err(e) => return Err(e),
-                }
-            }
-        }
-
-        // Now retire the previous secrets. `authenticate` only ever looks at the first stored
-        // credential, so leaving one behind would let a revoked secret shadow the new one.
-        for stale_id in &stale_ids {
-            match self
-                .store
-                .delete_credential(user_id, "totp", stale_id)
-                .await
-            {
-                Ok(true) => {
-                    tracing::debug!(user_id = %user_id, credential_id = %stale_id, "Deleted superseded TOTP credential");
-                }
-                Ok(false) => {
-                    tracing::error!(
-                        user_id = %user_id,
-                        credential_id = %stale_id,
-                        "Failed to delete superseded TOTP credential: not found"
-                    );
-                    return Err(AuthError::Internal(format!(
-                        "Failed to retire superseded TOTP credential {stale_id}"
-                    )));
-                }
-                Err(AuthError::Unsupported) => {
-                    tracing::error!(
-                        user_id = %user_id,
-                        count = stale_ids.len(),
-                        "Store does not support delete_credential; cannot safely retire superseded TOTP secrets"
-                    );
-                    return Err(AuthError::Unsupported);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        user_id = %user_id,
-                        credential_id = %stale_id,
-                        "Failed to delete superseded TOTP credential"
-                    );
-                    return Err(e);
                 }
             }
         }
@@ -1203,22 +1200,32 @@ mod tests {
         }
     }
 
-    /// Verifies that `register_totp` propagates an error if retiring existing credentials fails.
+    /// Verifies that `register_totp` propagates an error if retiring existing credentials fails,
+    /// and that the existing credentials remain preserved without being replaced by an unreturned secret.
     #[tokio::test]
     async fn test_register_totp_fails_if_retirement_fails() {
         let store = FailingRetirementStore {
             creds: Mutex::new(HashMap::new()),
         };
-        // Seed an existing credential
+        // Seed an existing deterministic credential and a stale credential
         store.creds.lock().unwrap().insert(
             "user1:totp".to_string(),
-            vec![serde_json::json!({
-                "credential_id": "old_cred",
-                "secret": "JBSWY3DPEHPK3PXP",
-                "algorithm": "SHA1",
-                "digits": 6,
-                "step": 30,
-            })],
+            vec![
+                serde_json::json!({
+                    "credential_id": "totp:user1",
+                    "secret": "JBSWY3DPEHPK3PXP",
+                    "algorithm": "SHA1",
+                    "digits": 6,
+                    "step": 30,
+                }),
+                serde_json::json!({
+                    "credential_id": "old_cred",
+                    "secret": "OLDSECRET3DPEHPK",
+                    "algorithm": "SHA1",
+                    "digits": 6,
+                    "step": 30,
+                }),
+            ],
         );
 
         let totp_method = TotpAuthMethod::new(store);
@@ -1238,6 +1245,15 @@ mod tests {
             }
             other => panic!("expected AuthError::Internal, got {:?}", other),
         }
+
+        // Verify the existing secret was not overwritten/replaced by an unreturned secret
+        let creds = totp_method
+            .store
+            .get_credentials("user1", "totp")
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 2);
+        assert_eq!(creds[0]["secret"], "JBSWY3DPEHPK3PXP");
     }
 
     /// Verifies that extract_totp_credential_id falls back to "id" if "credential_id" is null or empty.
