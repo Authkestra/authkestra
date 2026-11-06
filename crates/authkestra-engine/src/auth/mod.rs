@@ -55,7 +55,9 @@ pub mod discovery;
 
 /// Session management traits and types.
 pub mod session;
-pub use session::{Session, SessionConfig, SessionStore};
+pub use session::{
+    is_safe_relative_url, resolve_redirect_target, Session, SessionConfig, SessionStore,
+};
 
 /// Credential storage traits.
 ///
