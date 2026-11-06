@@ -331,8 +331,19 @@ fn verify_dpop_proof_inner(
     let now = chrono::Utc::now().timestamp();
     // A small allowance for clock skew between client and server on the
     // "not yet valid" side; the "too old" side is exactly `max_age`.
+    // Reject non-positive or out-of-range timestamps and use `checked_sub` so an
+    // extreme negative `iat` cannot overflow `now - claims.iat` in release builds.
     const CLOCK_SKEW_ALLOWANCE_SECS: i64 = 5;
-    if claims.iat > now + CLOCK_SKEW_ALLOWANCE_SECS || now - claims.iat > max_age.num_seconds() {
+    if claims.iat <= 0
+        || chrono::DateTime::<chrono::Utc>::from_timestamp(claims.iat, 0).is_none()
+        || claims.iat > now.saturating_add(CLOCK_SKEW_ALLOWANCE_SECS)
+    {
+        return Err(DpopError::Stale);
+    }
+    let Some(age) = now.checked_sub(claims.iat) else {
+        return Err(DpopError::Stale);
+    };
+    if age > max_age.num_seconds() {
         return Err(DpopError::Stale);
     }
 
@@ -1025,5 +1036,27 @@ mod tests {
             !logs.contains(&proof),
             "the proof must never be logged:\n{logs}"
         );
+    }
+
+    #[test]
+    fn rejects_extreme_negative_iat_without_overflow() {
+        for bad_iat in [i64::MIN, i64::MIN + 1, -1, 0] {
+            let mut builder = ProofBuilder::new();
+            builder.iat = bad_iat;
+            let proof = builder.build();
+
+            let err = verify_dpop_proof(
+                &proof,
+                "POST",
+                Some("https://as.example.com/token"),
+                None,
+                chrono::Duration::seconds(60),
+            )
+            .expect_err("extreme/non-positive iat must be rejected as stale");
+            assert!(
+                matches!(err, DpopError::Stale),
+                "expected DpopError::Stale for iat={bad_iat}, got {err:?}"
+            );
+        }
     }
 }
