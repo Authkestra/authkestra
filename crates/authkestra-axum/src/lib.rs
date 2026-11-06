@@ -68,6 +68,7 @@ impl<S, T> From<Engine<S, T>> for AxumState<S, T> {
 
 /// The extractor for a validated session.
 #[cfg(feature = "session")]
+#[derive(Clone, Debug)]
 pub struct AuthSession(pub Session);
 
 #[cfg(feature = "session")]
