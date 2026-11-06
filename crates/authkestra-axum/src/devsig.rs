@@ -194,6 +194,7 @@ where
     }
 }
 
+/// Authenticates an incoming Axum request against the DevSig profile v1 specification.
 #[tracing::instrument(skip_all, fields(method = %req.method(), path = %req.uri().path()))]
 async fn authenticate(shared: &Shared, req: Request<Body>) -> Result<Request<Body>, Box<Response>> {
     let (mut parts, body) = req.into_parts();
@@ -255,6 +256,7 @@ async fn authenticate(shared: &Shared, req: Request<Body>) -> Result<Request<Bod
     }
 }
 
+/// Extracts an ASCII header string value from the request parts.
 fn header_str(parts: &Parts, name: &HeaderName) -> Option<String> {
     parts
         .headers
@@ -263,6 +265,7 @@ fn header_str(parts: &Parts, name: &HeaderName) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Converts a [`VerifyError`] into a boxed HTTP [`Response`] refusal.
 // Boxed: `Response` is large enough that returning it bare in an `Err` variant trips
 // `clippy::result_large_err`, which inflates every `Ok` on this path to the error's size.
 fn reject(err: VerifyError) -> Box<Response> {

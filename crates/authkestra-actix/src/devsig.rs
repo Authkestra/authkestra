@@ -164,6 +164,7 @@ where
     }
 }
 
+/// Authenticates an incoming Actix service request against the DevSig profile v1 specification.
 #[tracing::instrument(skip_all, fields(method = %req.method(), path = %req.path()))]
 async fn authenticate(shared: &Shared, req: ServiceRequest) -> Result<ServiceRequest, Error> {
     let (http_req, mut payload) = req.into_parts();
@@ -231,6 +232,7 @@ async fn authenticate(shared: &Shared, req: ServiceRequest) -> Result<ServiceReq
     }
 }
 
+/// Extracts an ASCII header string value from the HTTP request.
 fn header_str(req: &HttpRequest, name: &HeaderName) -> Option<String> {
     req.headers()
         .get(name)
@@ -238,6 +240,7 @@ fn header_str(req: &HttpRequest, name: &HeaderName) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Converts a [`VerifyError`] into an Actix HTTP error refusal.
 fn reject(err: VerifyError) -> Error {
     let response = refusal_response(err.refusal());
     actix_web::error::InternalError::from_response(err, response).into()

@@ -210,6 +210,7 @@ async fn verify_inner(
     ))
 }
 
+/// Returns `Some(value)` if the optional string slice is present and non-empty.
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.filter(|v| !v.is_empty())
 }
