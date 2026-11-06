@@ -490,7 +490,7 @@ impl<
         self.codes.store_code(code).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, code))]
     async fn consume_code(
         &mut self,
         code: &str,
@@ -519,7 +519,7 @@ impl<
         self.refresh.store_token(token).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, token))]
     async fn consume_token(
         &mut self,
         token: &str,
@@ -528,7 +528,7 @@ impl<
         self.refresh.consume_token(token).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, token))]
     async fn get_token(
         &mut self,
         token: &str,
@@ -537,7 +537,7 @@ impl<
         self.refresh.get_token(token).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, token))]
     async fn revoke_token(
         &mut self,
         token: &str,
@@ -566,23 +566,23 @@ impl<
         self.devices.store_device_code(session).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, device_code))]
     async fn get_device_code(
         &mut self,
         device_code: &str,
     ) -> Result<Option<crate::device::DeviceCodeSession>, authkestra_engine::store::StoreError>
     {
-        tracing::debug!(device_code = %device_code, "CompositeOpStore: getting device code");
+        tracing::debug!("CompositeOpStore: getting device code");
         self.devices.get_device_code(device_code).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, user_code))]
     async fn get_by_user_code(
         &mut self,
         user_code: &str,
     ) -> Result<Option<crate::device::DeviceCodeSession>, authkestra_engine::store::StoreError>
     {
-        tracing::debug!(user_code = %user_code, "CompositeOpStore: getting by user code");
+        tracing::debug!("CompositeOpStore: getting by user code");
         self.devices.get_by_user_code(user_code).await
     }
 
@@ -595,22 +595,22 @@ impl<
         self.devices.update_device_code(session).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, device_code))]
     async fn delete_device_code(
         &mut self,
         device_code: &str,
     ) -> Result<(), authkestra_engine::store::StoreError> {
-        tracing::debug!(device_code = %device_code, "CompositeOpStore: deleting device code");
+        tracing::debug!("CompositeOpStore: deleting device code");
         self.devices.delete_device_code(device_code).await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, device_code))]
     async fn consume_device_code(
         &mut self,
         device_code: &str,
     ) -> Result<Option<crate::device::DeviceCodeSession>, authkestra_engine::store::StoreError>
     {
-        tracing::debug!(device_code = %device_code, "CompositeOpStore: consuming device code");
+        tracing::debug!("CompositeOpStore: consuming device code");
         self.devices.consume_device_code(device_code).await
     }
 }

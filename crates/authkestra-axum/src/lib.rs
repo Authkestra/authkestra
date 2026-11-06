@@ -68,6 +68,7 @@ impl<S, T> From<Engine<S, T>> for AxumState<S, T> {
 
 /// The extractor for a validated session.
 #[cfg(feature = "session")]
+#[derive(Clone, Debug)]
 pub struct AuthSession(pub Session);
 
 #[cfg(feature = "session")]
@@ -102,7 +103,7 @@ where
                 e
             })?;
 
-        tracing::info!(session_id = %session.id, user_id = %session.identity.external_id, "successfully extracted AuthSession");
+        tracing::info!(user_id = %session.identity.external_id, "successfully extracted AuthSession");
         Ok(AuthSession(session))
     }
 }
@@ -266,7 +267,8 @@ impl<S: Clone + Send + Sync + 'static, T: Clone + Send + Sync + 'static> AxumExt
             )
             .route(
                 "/auth/logout",
-                get(helpers::axum_logout_handler::<AppState, S, T>),
+                get(helpers::axum_logout_handler::<AppState, S, T>)
+                    .post(helpers::axum_logout_handler::<AppState, S, T>),
             )
     }
 }

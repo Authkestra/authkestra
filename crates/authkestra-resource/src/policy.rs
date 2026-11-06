@@ -20,26 +20,53 @@ pub trait PrincipalMapper: Send + Sync {
     }
 }
 
-/// Default [`PrincipalMapper`] producing `User::"{provider_id}|{external_id}"`
-/// (or `User::"{external_id}"` if `provider_id` is empty).
+/// Percent-encodes `:` and `%` in a principal identity component to prevent delimiter collisions
+/// while preserving all other Unicode characters unchanged.
+pub fn encode_principal_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            ':' => out.push_str("%3A"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Constructs a Cedar `User` entity UID string from provider and external IDs
+/// using unambiguous percent-encoding and a `:` separator (`{encoded_provider}:{encoded_external_id}`).
+///
+/// # Migration Note
+///
+/// Earlier versions formatted composite principal IDs with an unescaped `|` delimiter
+/// (`User::"{provider_id}|{external_id}"`), or omitted the provider prefix when `provider_id`
+/// was empty. This function always includes the `:` delimiter (`User::"{prov}:{ext}"`) and
+/// percent-encodes `%` (`%25`) and `:` (`%3A`) within each component so `("a:b", "c")` and
+/// `("a", "b:c")` cannot collide. When upgrading existing Cedar policy sets or entity stores,
+/// update any hardcoded `User::"provider|id"` literals (especially in `forbid` rules) to the
+/// `User::"provider:id"` format.
+pub fn format_principal_uid_str(provider_id: &str, external_id: &str) -> String {
+    let enc_prov = encode_principal_component(provider_id);
+    let enc_ext = encode_principal_component(external_id);
+    let combined = format!("{enc_prov}:{enc_ext}");
+    let escaped = combined.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(r#"User::"{escaped}""#)
+}
+
+/// Default [`PrincipalMapper`] producing `User::"{encoded_provider}:{encoded_external_id}"`.
 #[derive(Debug, Default, Clone)]
 pub struct DefaultPrincipalMapper;
 
 impl PrincipalMapper for DefaultPrincipalMapper {
     fn principal(&self, identity: &Identity) -> Result<EntityUid, PolicyError> {
-        let escaped_ext = identity
-            .external_id
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        let uid_str = if identity.provider_id.is_empty() {
-            format!(r#"User::"{escaped_ext}""#)
-        } else {
-            let escaped_prov = identity
-                .provider_id
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"");
-            format!(r#"User::"{escaped_prov}|{escaped_ext}""#)
-        };
+        let uid_str = format_principal_uid_str(&identity.provider_id, &identity.external_id);
+        tracing::debug!(
+            provider_id = %identity.provider_id,
+            external_id = %identity.external_id,
+            uid_str = %uid_str,
+            "mapped identity to principal entity UID"
+        );
         parse_entity_uid(&uid_str)
     }
 }
@@ -155,12 +182,12 @@ mod tests {
     async fn test_policy_guard_permit_and_deny() {
         let policies = r#"
             permit(
-                principal == User::"github|alice",
+                principal == User::"github:alice",
                 action == Action::"read",
                 resource == Resource::"document_1"
             );
             forbid(
-                principal == User::"github|bob",
+                principal == User::"github:bob",
                 action,
                 resource
             );
@@ -225,5 +252,82 @@ mod tests {
             .await
             .expect("auth charlie");
         assert!(!decision.is_allowed());
+    }
+
+    /// Verifies that `DefaultPrincipalMapper` prevents collisions across delimiter boundaries
+    /// and preserves non-ASCII Unicode characters in identity components.
+    #[test]
+    fn test_principal_id_collision_prevention() {
+        let mapper = DefaultPrincipalMapper;
+
+        // Identity 1: empty provider, external_id "github:alice"
+        let id1 = Identity {
+            provider_id: "".to_string(),
+            external_id: "github:alice".to_string(),
+            email: None,
+            username: None,
+            attributes: Default::default(),
+        };
+
+        // Identity 2: provider "github", external_id "alice"
+        let id2 = Identity {
+            provider_id: "github".to_string(),
+            external_id: "alice".to_string(),
+            email: None,
+            username: None,
+            attributes: Default::default(),
+        };
+
+        // Identity 3: provider "github:sub", external_id "alice"
+        let id3 = Identity {
+            provider_id: "github:sub".to_string(),
+            external_id: "alice".to_string(),
+            email: None,
+            username: None,
+            attributes: Default::default(),
+        };
+
+        // Identity 4: provider "github", external_id "sub:alice"
+        let id4 = Identity {
+            provider_id: "github".to_string(),
+            external_id: "sub:alice".to_string(),
+            email: None,
+            username: None,
+            attributes: Default::default(),
+        };
+
+        let uid1 = mapper.principal(&id1).unwrap().to_string();
+        let uid2 = mapper.principal(&id2).unwrap().to_string();
+        let uid3 = mapper.principal(&id3).unwrap().to_string();
+        let uid4 = mapper.principal(&id4).unwrap().to_string();
+
+        assert_eq!(uid1, r#"User::":github%3Aalice""#);
+        assert_eq!(uid2, r#"User::"github:alice""#);
+        assert_eq!(uid3, r#"User::"github%3Asub:alice""#);
+        assert_eq!(uid4, r#"User::"github:sub%3Aalice""#);
+
+        assert_ne!(
+            uid1, uid2,
+            "empty provider must not collide with non-empty provider"
+        );
+        assert_ne!(
+            uid3, uid4,
+            "colon inside provider must not collide with colon inside external_id"
+        );
+
+        // Non-ASCII external_id is preserved without UTF-8 byte corruption
+        let unicode_id = Identity {
+            provider_id: "oidc".to_string(),
+            external_id: "müller:अदिति%100".to_string(),
+            email: None,
+            username: None,
+            attributes: Default::default(),
+        };
+        assert_eq!(
+            encode_principal_component(&unicode_id.external_id),
+            "müller%3Aअदिति%25100"
+        );
+        let unicode_uid = mapper.principal(&unicode_id).unwrap().to_string();
+        assert_eq!(unicode_uid, r#"User::"oidc:müller%3Aअदिति%25100""#);
     }
 }

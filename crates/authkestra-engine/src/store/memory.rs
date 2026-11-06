@@ -77,10 +77,13 @@ impl<T> MemoryStore<T> {
 
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn get(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "loading from memory store");
-        let mut data = self.data.lock().unwrap();
+        tracing::debug!("loading from memory store");
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
 
         if let Some(entry) = data.get(key) {
             if entry.is_expired() {
@@ -92,30 +95,40 @@ impl<T: Clone + Send + Sync + 'static> KvStore<T> for MemoryStore<T> {
         Ok(None)
     }
 
-    #[tracing::instrument(skip(self, value), fields(key = %key))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn set(&self, key: &str, value: T, ttl: Duration) -> Result<(), StoreError> {
         tracing::debug!("saving to memory store");
         let entry = StoreEntry {
             value,
             expires_at: Some(Instant::now() + ttl),
         };
-        self.data.lock().unwrap().insert(key.to_string(), entry);
+        self.data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?
+            .insert(key.to_string(), entry);
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
-        tracing::debug!(key = %key, "deleting from memory store");
-        self.data.lock().unwrap().remove(key);
+        tracing::debug!("deleting from memory store");
+        self.data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?
+            .remove(key);
         Ok(())
     }
 }
 
 #[async_trait]
-impl<T: Clone + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
+impl<T: Clone + serde::Serialize + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
+    /// Atomically fetches and removes the value stored under `key`.
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "atomically consuming from memory store");
-        let mut data = self.data.lock().unwrap();
+        tracing::debug!("atomically consuming from memory store");
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         if let Some(entry) = data.remove(key) {
             if entry.is_expired() {
                 return Ok(None);
@@ -124,12 +137,36 @@ impl<T: Clone + Send + Sync + 'static> AtomicConsume<T> for MemoryStore<T> {
         }
         Ok(None)
     }
+
+    /// Atomically deletes the entry at `key` only if its unexpired value equals `expected`.
+    async fn delete_if_eq(&self, key: &str, expected: &T) -> Result<bool, StoreError> {
+        tracing::debug!(key = %key, "atomically deleting if equal from memory store");
+        let expected_val =
+            serde_json::to_value(expected).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
+        if let Some(entry) = data.get(key) {
+            if entry.is_expired() {
+                data.remove(key);
+                return Ok(false);
+            }
+            let current_val = serde_json::to_value(&entry.value)
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            if current_val == expected_val {
+                data.remove(key);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> AtomicDecrement<T> for MemoryStore<T> {
     async fn init_counter(&self, key: &str, value: u32, ttl: Duration) -> Result<(), StoreError> {
-        tracing::debug!(key = %key, value, "initialising a counter in memory store");
+        tracing::debug!(value, "initialising a counter in memory store");
         let mut counters = self.counters.lock().unwrap();
         // Opportunistic sweep, in the same spirit as `insert_if_absent`'s.
         // A counter is only ever reclaimed by a later `decrement` on its own
@@ -152,42 +189,45 @@ impl<T: Clone + Send + Sync + 'static> AtomicDecrement<T> for MemoryStore<T> {
         // atomic: two callers cannot both observe the pre-decrement value.
         let mut counters = self.counters.lock().unwrap();
         let Some(entry) = counters.get_mut(key) else {
-            tracing::debug!(key = %key, "no counter to decrement");
+            tracing::debug!("no counter to decrement");
             return Ok(None);
         };
         if entry.is_expired() {
             counters.remove(key);
-            tracing::debug!(key = %key, "counter had expired");
+            tracing::debug!("counter had expired");
             return Ok(None);
         }
         if entry.value == 0 {
             // Already spent. Reported as "no attempt available" rather than
             // `Some(0)`, so a caller can tell an authorised last attempt from
             // one that was never granted.
-            tracing::debug!(key = %key, "counter already spent");
+            tracing::debug!("counter already spent");
             return Ok(None);
         }
         entry.value -= 1;
         let remaining = entry.value;
-        tracing::debug!(key = %key, remaining, "decremented a counter");
+        tracing::debug!(remaining, "decremented a counter");
         Ok(Some(remaining))
     }
 }
 
 #[async_trait]
 impl<T: Clone + Send + Sync + 'static> AtomicInsert<T> for MemoryStore<T> {
-    #[tracing::instrument(skip(self, value))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn insert_if_absent(
         &self,
         key: &str,
         value: T,
         ttl: Duration,
     ) -> Result<bool, StoreError> {
-        tracing::debug!(key = %key, "atomically inserting into memory store if absent");
+        tracing::debug!("atomically inserting into memory store if absent");
         // Held for the whole check-then-insert: this single lock is what
         // makes the operation atomic, exactly like `consume`'s single
         // `remove` call above.
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         let mut expiry_queue = self.insert_only_expiry_queue.lock().unwrap();
 
         // `get`/`consume` each self-heal by removing an expired entry the
@@ -285,7 +325,10 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             value,
             expires_at: Some(Instant::now() + ttl),
         };
-        let mut data = self.data.lock().unwrap();
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
         let mut indices = self.indices.lock().unwrap();
 
         data.insert(primary_key.to_string(), entry);
@@ -295,14 +338,17 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
     }
 
     async fn get_by_index(&self, secondary_key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(secondary_key = %secondary_key, "loading by index from memory store");
+        tracing::debug!("loading by index from memory store");
         let primary_key_opt = {
             let indices = self.indices.lock().unwrap();
             indices.get(secondary_key).cloned()
         };
 
         if let Some(primary_key) = primary_key_opt {
-            let mut data = self.data.lock().unwrap();
+            let mut data = self
+                .data
+                .lock()
+                .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
             if let Some(entry) = data.get(&primary_key) {
                 if entry.is_expired() {
                     data.remove(&primary_key);
@@ -317,6 +363,185 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             }
         }
         Ok(None)
+    }
+}
+
+/// An in-memory implementation of [`crate::auth::CredentialStore`].
+#[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+#[derive(Clone, Default, Debug)]
+pub struct MemoryCredentialStore {
+    creds: Arc<Mutex<HashMap<String, Vec<serde_json::Value>>>>,
+}
+
+#[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+impl MemoryCredentialStore {
+    /// Create a new empty `MemoryCredentialStore`.
+    pub fn new() -> Self {
+        Self {
+            creds: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Acquires the internal credential mutex, mapping a poisoned lock to `AuthError::Internal`.
+    fn lock(
+        &self,
+    ) -> Result<
+        std::sync::MutexGuard<'_, HashMap<String, Vec<serde_json::Value>>>,
+        crate::auth::error::AuthError,
+    > {
+        self.creds.lock().map_err(|_| {
+            tracing::error!("memory credential store mutex poisoned");
+            crate::auth::error::AuthError::Internal("credential store unavailable".into())
+        })
+    }
+}
+
+#[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+#[async_trait]
+impl crate::auth::CredentialStore for MemoryCredentialStore {
+    /// Saves or replaces a credential for `user_id` and `cred_type`.
+    async fn save_credential(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+        data: serde_json::Value,
+    ) -> Result<(), crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let mut creds = self.lock()?;
+        let list = creds.entry(key).or_default();
+        let cred_id = data
+            .get("credential_id")
+            .or_else(|| data.get("id"))
+            .and_then(|v| v.as_str());
+        if let Some(id) = cred_id {
+            if let Some(pos) = list.iter().position(|c| {
+                c.get("credential_id")
+                    .or_else(|| c.get("id"))
+                    .and_then(|v| v.as_str())
+                    == Some(id)
+            }) {
+                list[pos] = data;
+                return Ok(());
+            }
+        }
+        list.push(data);
+        Ok(())
+    }
+
+    /// Retrieves all credentials stored for `user_id` and `cred_type`.
+    async fn get_credentials(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+    ) -> Result<Vec<serde_json::Value>, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let creds = self.lock()?;
+        Ok(creds.get(&key).cloned().unwrap_or_default())
+    }
+
+    /// Updates fields of a stored credential identified by `credential_id`.
+    async fn update_credential(
+        &self,
+        credential_id: &str,
+        data: serde_json::Value,
+    ) -> Result<(), crate::auth::error::AuthError> {
+        let mut creds = self.lock()?;
+        for list in creds.values_mut() {
+            for val in list.iter_mut() {
+                if let Some(obj) = val.as_object_mut() {
+                    if obj
+                        .get("credential_id")
+                        .or_else(|| obj.get("id"))
+                        .and_then(|v| v.as_str())
+                        == Some(credential_id)
+                    {
+                        if let Some(update_obj) = data.as_object() {
+                            for (k, v) in update_obj {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Deletes a specific credential by `credential_id` for `user_id` and `cred_type`.
+    async fn delete_credential(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+        credential_id: &str,
+    ) -> Result<bool, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let mut creds = self.lock()?;
+        if let Some(list) = creds.get_mut(&key) {
+            let orig = list.len();
+            list.retain(|c| {
+                c.get("credential_id")
+                    .or_else(|| c.get("id"))
+                    .and_then(|v| v.as_str())
+                    != Some(credential_id)
+            });
+            Ok(list.len() < orig)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Deletes all credentials of `cred_type` for `user_id`.
+    async fn delete_credentials(
+        &self,
+        user_id: &str,
+        cred_type: &str,
+    ) -> Result<u64, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:{cred_type}");
+        let mut creds = self.lock()?;
+        if let Some(list) = creds.remove(&key) {
+            Ok(list.len() as u64)
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Atomically claims `matched_step` for a TOTP credential if it exceeds `last_used_step`.
+    async fn claim_totp_step(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        matched_step: u64,
+    ) -> Result<bool, crate::auth::error::AuthError> {
+        let key = format!("{user_id}:totp");
+        let mut creds = self.lock()?;
+        let Some(list) = creds.get_mut(&key) else {
+            return Ok(false);
+        };
+        for val in list.iter_mut() {
+            if let Some(obj) = val.as_object_mut() {
+                if obj
+                    .get("credential_id")
+                    .or_else(|| obj.get("id"))
+                    .and_then(|v| v.as_str())
+                    == Some(credential_id)
+                {
+                    let current = obj
+                        .get("last_used_step")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if matched_step > current {
+                        obj.insert(
+                            "last_used_step".to_string(),
+                            serde_json::json!(matched_step),
+                        );
+                        return Ok(true);
+                    } else {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -645,5 +870,31 @@ mod tests {
 
         // Next get by index should return None (and internally clean up the orphaned index)
         assert_eq!(store.get_by_index("sk1").await.unwrap(), None);
+    }
+
+    #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
+    #[tokio::test]
+    async fn test_memory_credential_store_totp_step_claim() {
+        use crate::auth::CredentialStore;
+        let store = MemoryCredentialStore::new();
+
+        store
+            .save_credential(
+                "alice",
+                "totp",
+                serde_json::json!({
+                    "credential_id": "cred1",
+                    "secret": "ABC",
+                    "last_used_step": 0
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(store.claim_totp_step("alice", "cred1", 50).await.unwrap());
+        assert!(!store.claim_totp_step("alice", "cred1", 50).await.unwrap());
+        assert!(!store.claim_totp_step("alice", "cred1", 49).await.unwrap());
+        assert!(store.claim_totp_step("alice", "cred1", 51).await.unwrap());
+        assert!(!store.claim_totp_step("bob", "cred1", 52).await.unwrap());
     }
 }

@@ -33,7 +33,9 @@
 //!   buffers the body (with an explicit, enforced size cap), calls `authkestra_devsig::verify`
 //!   with the full request — including the body — and stashes the resulting
 //!   `authkestra_devsig::DeviceIdentity` in request extensions on success, or short-circuits
-//!   with a `401`/`413` response on failure.
+//!   with a `401`/`413` response on failure — in device-signature profile v1's shape (a JSON
+//!   body `{"error": "<code>"}` and, for a `401`, a `WWW-Authenticate: DeviceSignature`
+//!   challenge; see [`refusal_response`]).
 //! - [`AuthDeviceSignature`] implements `FromRequestParts` (this module, only compiled when the
 //!   `devsig` feature is enabled), reading the value the layer already placed in extensions.
 //!   This is intentionally *not* where any verification happens — by the time an extractor
@@ -54,12 +56,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use authkestra_devsig::{
-    verify, DeviceIdentity, IssuerJwks, ReplayStore, SignedRequest, VerifierConfig, VerifyError,
+    verify, DeviceIdentity, IssuerJwks, Refusal, ReplayStore, SignedRequest, VerifierConfig,
+    VerifyError, REFUSAL_CONTENT_TYPE,
 };
 use axum::body::Body;
 use axum::extract::{FromRequestParts, Request};
+use axum::http::header::{CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::request::Parts;
-use axum::http::{HeaderName, StatusCode};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Limited};
@@ -190,6 +194,7 @@ where
     }
 }
 
+/// Authenticates an incoming Axum request against the DevSig profile v1 specification.
 #[tracing::instrument(skip_all, fields(method = %req.method(), path = %req.uri().path()))]
 async fn authenticate(shared: &Shared, req: Request<Body>) -> Result<Request<Body>, Box<Response>> {
     let (mut parts, body) = req.into_parts();
@@ -201,6 +206,11 @@ async fn authenticate(shared: &Shared, req: Request<Body>) -> Result<Request<Bod
         Ok(collected) => collected.to_bytes(),
         Err(_) => {
             tracing::warn!(target: "authkestra_devsig", max_body_size = shared.max_body_size, "rejecting request: body exceeds configured maximum");
+            tracing::info!(
+                target: "authkestra_devsig",
+                limit = shared.max_body_size,
+                "device-signature request body over the limit; answering 413"
+            );
             return Err(reject(VerifyError::BodyTooLarge(shared.max_body_size)));
         }
     };
@@ -246,6 +256,7 @@ async fn authenticate(shared: &Shared, req: Request<Body>) -> Result<Request<Bod
     }
 }
 
+/// Extracts an ASCII header string value from the request parts.
 fn header_str(parts: &Parts, name: &HeaderName) -> Option<String> {
     parts
         .headers
@@ -254,14 +265,64 @@ fn header_str(parts: &Parts, name: &HeaderName) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Converts a [`VerifyError`] into a boxed HTTP [`Response`] refusal.
 // Boxed: `Response` is large enough that returning it bare in an `Err` variant trips
 // `clippy::result_large_err`, which inflates every `Ok` on this path to the error's size.
 fn reject(err: VerifyError) -> Box<Response> {
-    let status = match err {
-        VerifyError::BodyTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
-        _ => StatusCode::UNAUTHORIZED,
-    };
-    Box::new((status, err.code().to_string()).into_response())
+    Box::new(refusal_response(err.refusal()))
+}
+
+/// Renders a device-signature refusal in profile v1's shape
+/// (`docs/rfc-014-devsig-profile-v1.md`): the refusal's status, a JSON body
+/// `{"error": "<code>"}` (`Content-Type: application/json`), and — for a `401` — a
+/// `WWW-Authenticate: DeviceSignature error="<code>"` challenge.
+///
+/// [`DeviceSignatureLayer`] answers every rejection with it. It is public so a handler can
+/// answer the two refusals the verifier never produces in the same shape a client already sorts
+/// by: [`Refusal::device_revoked`] (the application knows the device is revoked) and
+/// [`Refusal::insufficient_user_authentication`] (the handler needs the user-present key, see
+/// `authkestra_devsig::DeviceIdentity::key_role`).
+///
+/// ```
+/// use authkestra_axum::devsig::refusal_response;
+/// use authkestra_devsig::Refusal;
+///
+/// let response = refusal_response(Refusal::insufficient_user_authentication());
+/// assert_eq!(response.status(), 401);
+/// assert_eq!(
+///     response.headers()["www-authenticate"],
+///     r#"DeviceSignature error="insufficient_user_authentication""#
+/// );
+/// ```
+pub fn refusal_response(refusal: Refusal) -> Response {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or_else(|_| {
+        tracing::warn!(
+            target: "authkestra_devsig",
+            status = refusal.status,
+            code = refusal.error,
+            "invalid refusal status; answering 401"
+        );
+        StatusCode::UNAUTHORIZED
+    });
+    let mut response = (
+        status,
+        [(CONTENT_TYPE, HeaderValue::from_static(REFUSAL_CONTENT_TYPE))],
+        refusal.body(),
+    )
+        .into_response();
+    if let Some(challenge) = refusal.www_authenticate() {
+        match HeaderValue::from_str(&challenge) {
+            Ok(value) => {
+                response.headers_mut().insert(WWW_AUTHENTICATE, value);
+            }
+            Err(_) => tracing::warn!(
+                target: "authkestra_devsig",
+                code = refusal.error,
+                "refusal challenge is not a valid header value; omitting WWW-Authenticate"
+            ),
+        }
+    }
+    response
 }
 
 /// The extractor for a request verified by [`DeviceSignatureLayer`].

@@ -867,6 +867,7 @@ fn build_resolver(config: &ValidationConfig) -> Box<dyn JwksResolver> {
 fn build_validation(config: &ValidationConfig, multi_issuer: bool) -> Validation {
     let mut validation = Validation::new(config.algorithms[0]);
     validation.algorithms = config.algorithms.clone();
+    validation.validate_nbf = true;
     // Set explicitly rather than left to `jsonwebtoken`'s default, so the
     // window in which an expired token is still honoured is this crate's
     // decision and is visible in `ValidationConfig` (#350).
@@ -906,6 +907,7 @@ fn build_validation(config: &ValidationConfig, multi_issuer: bool) -> Validation
 
     if !config.audience.is_empty() {
         validation.set_audience(&config.audience);
+        validation.required_spec_claims.insert("aud".to_string());
     }
 
     validation
@@ -1306,8 +1308,11 @@ pub async fn verify_dpop_binding(
     // (`iat + max_age`) whenever this request is processed even slightly
     // after `iat`, opening a real, if narrow, replay window. The extra
     // second guards the exact boundary instant itself.
-    let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(verified.iat, 0)
-        .unwrap_or_else(chrono::Utc::now)
+    let iat_dt =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(verified.iat, 0).ok_or_else(|| {
+            ValidationError::InvalidToken("invalid DPoP proof iat timestamp".to_string())
+        })?;
+    let expires_at = iat_dt
         + chrono::Duration::seconds(crate::dpop::DPOP_PROOF_MAX_AGE_SECS)
         + chrono::Duration::seconds(1);
     match replay_store
@@ -1535,6 +1540,12 @@ fn narrow_to_header_family(
     narrowed
         .algorithms
         .retain(|alg| alg.family() == header_alg.family());
+    if narrowed.validate_aud && narrowed.aud.as_ref().is_some_and(|a| !a.is_empty()) {
+        narrowed.required_spec_claims.insert("aud".to_string());
+    }
+    if narrowed.iss.as_ref().is_some_and(|i| !i.is_empty()) {
+        narrowed.required_spec_claims.insert("iss".to_string());
+    }
     tracing::debug!(
         header_alg = ?header_alg,
         accepted = ?validation.algorithms,

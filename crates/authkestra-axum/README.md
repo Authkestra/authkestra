@@ -179,6 +179,14 @@ async fn transfer_handler(AuthDeviceSignature(identity): AuthDeviceSignature) ->
 }
 ```
 
+A refused request is answered in [device-signature profile v1](../../docs/rfc-014-devsig-profile-v1.md)'s
+shape: the status (`401`, or `413` for an oversized body), `Content-Type: application/json`, the
+body `{"error": "<code>"}` (e.g. `{"error":"attestation_expired"}`), and on a `401` a
+`WWW-Authenticate: DeviceSignature error="<code>"` challenge. A handler answers the two refusals
+the verifier never produces in the same shape with `devsig::refusal_response`:
+`Refusal::device_revoked()` (`403`) and `Refusal::insufficient_user_authentication()` (`401`,
+when `identity.key_role()` is not `KeyRole::UserPresent`).
+
 See
 [`crates/authkestra/examples/axum_devsig/`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra/examples/axum_devsig)
 for a complete, runnable example (all examples live in the `authkestra` facade crate):

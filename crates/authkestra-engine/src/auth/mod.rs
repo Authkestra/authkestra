@@ -55,7 +55,9 @@ pub mod discovery;
 
 /// Session management traits and types.
 pub mod session;
-pub use session::{Session, SessionConfig, SessionStore};
+pub use session::{
+    is_safe_relative_url, resolve_redirect_target, Session, SessionConfig, SessionStore,
+};
 
 /// Credential storage traits.
 ///
@@ -63,6 +65,11 @@ pub use session::{Session, SessionConfig, SessionStore};
 /// them has nothing to store.
 #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
 pub mod store;
+#[cfg(all(
+    feature = "memory",
+    any(feature = "webauthn", feature = "totp", feature = "recovery-codes")
+))]
+pub use crate::store::memory::MemoryCredentialStore;
 #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]
 pub use store::CredentialStore;
 

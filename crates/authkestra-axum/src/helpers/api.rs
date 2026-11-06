@@ -1,5 +1,7 @@
 #![allow(unused_imports)]
-pub use authkestra_engine::auth::{Session, SessionConfig, SessionStore};
+pub use authkestra_engine::auth::{
+    is_safe_relative_url, resolve_redirect_target, Session, SessionConfig, SessionStore,
+};
 #[cfg(feature = "token")]
 use authkestra_engine::TokenManager;
 use authkestra_engine::{
@@ -44,7 +46,7 @@ const STATE_COOKIE: &str = "ak_state";
 
 /// Helper to initiate the OAuth2 login flow.
 ///
-/// This generates the authorization URL and sets a CSRF state cookie.
+/// This generates the authorization URL with PKCE challenge and sets an encrypted CSRF state cookie.
 pub fn initiate_oauth_login(
     flow: &dyn ErasedOAuthFlow,
     cookies: &Cookies,
@@ -56,7 +58,18 @@ pub fn initiate_oauth_login(
     let (url, mut auth_state) = flow.initiate_login(scopes, Some(&pkce.code_challenge));
 
     auth_state.code_verifier = Some(pkce.code_verifier);
-    auth_state.success_url = success_url;
+    let safe_success_url = match success_url {
+        Some(ref u) if is_safe_relative_url(u) => success_url,
+        Some(invalid) => {
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe or invalid success_url provided in login request; ignoring"
+            );
+            None
+        }
+        None => None,
+    };
+    auth_state.success_url = safe_success_url;
 
     let encrypted = auth_state
         .encrypt(&config.state_encryption_key)
@@ -158,7 +171,7 @@ pub async fn handle_oauth_callback_erased(
     params: OAuthCallbackParams,
     store: Arc<dyn SessionStore>,
     config: SessionConfig,
-    _success_url: &str,
+    success_url: &str,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let (mut identity, token, auth_state) =
         finalize_callback_erased(flow, &cookies, &params, &config).await?;
@@ -186,7 +199,6 @@ pub async fn handle_oauth_callback_erased(
         chrono::Utc::now() + session_duration,
     );
 
-    let session_id = session.id.clone();
     let user_id = session.identity.external_id.clone();
     store.save_session(&session).await.map_err(|e| {
         tracing::error!(error = %e, "failed to persist the session after a successful login");
@@ -195,12 +207,20 @@ pub async fn handle_oauth_callback_erased(
             format!("Failed to save session: {e}"),
         )
     })?;
-    tracing::info!(%session_id, %user_id, "OAuth login completed; session created");
+    tracing::info!(%user_id, "OAuth login completed; session created");
 
     let cookie = create_axum_cookie(&config, session.id);
     cookies.add(cookie);
 
-    let redirect_url = auth_state.success_url.unwrap_or_else(|| "/".to_string());
+    if let Some(ref invalid) = auth_state.success_url {
+        if !is_safe_relative_url(invalid) {
+            tracing::warn!(
+                invalid = ?invalid.chars().take(128).collect::<String>(),
+                "unsafe success_url found in OAuth state during callback redirect; falling back to default"
+            );
+        }
+    }
+    let redirect_url = resolve_redirect_target(auth_state.success_url.as_deref(), success_url);
     Ok(Redirect::to(&redirect_url).into_response())
 }
 
@@ -306,7 +326,7 @@ pub async fn logout(
             tracing::error!(error = %e, "failed to delete the session during logout");
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         })?;
-        tracing::info!(session_id = %id, "session deleted on logout");
+        tracing::info!("session deleted on logout");
     } else {
         // Still clears the cookie below, so this is a no-op logout rather
         // than an error — worth saying, since it looks like a failure to
@@ -318,8 +338,16 @@ pub async fn logout(
     cookie.set_max_age(Some(tower_cookies::cookie::time::Duration::ZERO));
     cookies.remove(cookie);
 
-    Ok(Redirect::to(redirect_to))
+    let target = if is_safe_relative_url(redirect_to) {
+        redirect_to
+    } else {
+        tracing::warn!(%redirect_to, "unsafe redirect_to in logout; falling back to '/'");
+        "/"
+    };
+    Ok(Redirect::to(target))
 }
+
+/// Axum request handler to initiate an OAuth2 login flow for the named provider.
 pub async fn axum_login_handler<AppState, S, T>(
     Path(provider): Path<String>,
     axum::extract::State(state): axum::extract::State<AppState>,
@@ -362,6 +390,7 @@ where
     Ok(redirect)
 }
 
+/// Axum request handler to finalize an OAuth2 login callback and establish a server-side session.
 #[cfg(feature = "session")]
 pub async fn axum_callback_handler<AppState, S, T>(
     Path(provider): Path<String>,
@@ -408,6 +437,7 @@ where
     })
 }
 
+/// Axum request handler to finalize an OAuth2 login callback and issue a stateless JWT.
 #[cfg(feature = "token")]
 pub async fn axum_callback_handler_stateless<AppState, S, T>(
     Path(provider): Path<String>,
@@ -454,9 +484,11 @@ where
     })
 }
 
+/// Axum request handler to log out a session and clear the session cookie.
 #[cfg(feature = "session")]
 pub async fn axum_logout_handler<AppState, S, T>(
     axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
     cookies: Cookies,
 ) -> Result<impl IntoResponse, AxumError>
 where
@@ -465,6 +497,17 @@ where
     Result<Arc<dyn SessionStore>, AxumError>: axum::extract::FromRef<AppState>,
 {
     use axum::extract::FromRef;
+    if headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("cross-site"))
+        .unwrap_or(false)
+    {
+        tracing::warn!("cross-site logout rejected via Sec-Fetch-Site");
+        return Err(AxumError::Unauthorized(
+            "Cross-site request rejected".to_string(),
+        ));
+    }
     let session_config = SessionConfig::from_ref(&state);
     let session_store = <Result<Arc<dyn SessionStore>, AxumError>>::from_ref(&state)?;
 
@@ -565,8 +608,9 @@ impl IntoResponse for AxumError {
     }
 }
 
+/// Extracts and validates the current user session from request cookies.
 #[cfg(feature = "session")]
-#[tracing::instrument(skip(store, cookies))]
+#[tracing::instrument(skip(store, config, cookies))]
 pub async fn get_session(
     store: &Arc<dyn SessionStore>,
     config: &SessionConfig,
@@ -593,7 +637,12 @@ pub async fn get_session(
             AxumError::Unauthorized("Invalid session".to_string())
         })?;
 
-    tracing::info!(session_id = %session.id, user_id = %session.identity.external_id, "successfully retrieved session");
+    if session.expires_at <= chrono::Utc::now() {
+        tracing::warn!("session expired in get_session; deleting");
+        let _ = store.delete_session(&session_id).await;
+        return Err(AxumError::Unauthorized("Session expired".to_string()));
+    }
+    tracing::info!(user_id = %session.identity.external_id, "successfully retrieved session");
     Ok(session)
 }
 

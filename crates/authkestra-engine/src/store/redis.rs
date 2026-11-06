@@ -50,9 +50,9 @@ impl RedisStore {
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for RedisStore {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn get(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "loading from redis store");
+        tracing::debug!("loading from redis store");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -79,7 +79,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for Red
         }
     }
 
-    #[tracing::instrument(skip(self, value), fields(key = %key))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn set(&self, key: &str, value: T, ttl: Duration) -> Result<(), StoreError> {
         tracing::debug!("saving to redis store");
         let mut conn = self
@@ -96,26 +96,30 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> KvStore<T> for Red
             StoreError::Serialization(format!("Serialization error: {e}"))
         })?;
 
-        let ttl_secs = ttl.as_secs();
-        if ttl_secs == 0 {
-            tracing::warn!("ttl is 0, not saving to redis");
+        if ttl.is_zero() {
+            tracing::debug!(key = %key, "ttl is 0, deleting key from redis");
+            let _: () = conn.del(self.key(key)).await.map_err(|e| {
+                tracing::error!(error = %e, "Redis del error");
+                StoreError::Internal(format!("Redis del error: {e}"))
+            })?;
             return Ok(());
         }
 
+        let ttl_ms = (ttl.as_millis() as u64).max(1);
         let _: () = conn
-            .set_ex(self.key(key), json, ttl_secs)
+            .pset_ex(self.key(key), json, ttl_ms)
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "Redis set error");
-                StoreError::Internal(format!("Redis set error: {e}"))
+                tracing::error!(error = %e, "Redis pset_ex error");
+                StoreError::Internal(format!("Redis pset_ex error: {e}"))
             })?;
 
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
-        tracing::debug!(key = %key, "deleting from redis store");
+        tracing::debug!("deleting from redis store");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -138,14 +142,14 @@ use crate::store::{ttl_ceil_secs, AtomicConsume, AtomicDecrement, AtomicInsert, 
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicInsert<T> for RedisStore {
-    #[tracing::instrument(skip(self, value))]
+    #[tracing::instrument(skip(self, key, value))]
     async fn insert_if_absent(
         &self,
         key: &str,
         value: T,
         ttl: Duration,
     ) -> Result<bool, StoreError> {
-        tracing::debug!(key = %key, "atomically inserting into redis store if absent");
+        tracing::debug!("atomically inserting into redis store if absent");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -187,9 +191,9 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicInsert<T> fo
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicConsume<T> for RedisStore {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn consume(&self, key: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(key = %key, "atomically consuming from redis store");
+        tracing::debug!("atomically consuming from redis store");
 
         // Note: We atomically consume the primary key using a Lua script.
         // The associated index_key (if any) is not deleted here because it is not provided
@@ -234,11 +238,52 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicConsume<T> f
             None => Ok(None),
         }
     }
+
+    #[tracing::instrument(skip(self, expected))]
+    async fn delete_if_eq(&self, key: &str, expected: &T) -> Result<bool, StoreError> {
+        tracing::debug!(key = %key, "atomically deleting if equal from redis store");
+        let mut conn = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Redis connection error");
+                StoreError::Internal(format!("Redis connection error: {e}"))
+            })?;
+
+        let expected_json = serde_json::to_string(expected).map_err(|e| {
+            tracing::error!(error = %e, "Serialization error");
+            StoreError::Serialization(format!("Serialization error: {e}"))
+        })?;
+
+        let script = redis::Script::new(
+            r#"
+            local val = redis.call('GET', KEYS[1])
+            if val and val == ARGV[1] then
+                redis.call('DEL', KEYS[1])
+                return 1
+            end
+            return 0
+            "#,
+        );
+
+        let deleted: i64 = script
+            .key(self.key(key))
+            .arg(expected_json)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Redis delete_if_eq script error");
+                StoreError::Internal(format!("Redis delete_if_eq script error: {e}"))
+            })?;
+
+        Ok(deleted == 1)
+    }
 }
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicDecrement<T> for RedisStore {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn init_counter(&self, key: &str, value: u32, ttl: Duration) -> Result<(), StoreError> {
         let mut conn = self
             .client
@@ -262,7 +307,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> AtomicDecrement<T>
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, key))]
     async fn decrement(&self, key: &str) -> Result<Option<u32>, StoreError> {
         let mut conn = self
             .client
@@ -331,7 +376,7 @@ impl RedisStore {
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> for RedisStore {
-    #[tracing::instrument(skip(self, value), fields(key = %key, index = %index))]
+    #[tracing::instrument(skip(self, key, index, value))]
     async fn set_indexed(
         &self,
         key: &str,
@@ -354,17 +399,23 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> 
             StoreError::Serialization(format!("Serialization error: {e}"))
         })?;
 
-        let ttl_secs = ttl.as_secs();
-        if ttl_secs == 0 {
-            tracing::warn!("ttl is 0, not saving to redis");
+        if ttl.is_zero() {
+            tracing::debug!(key = %key, index = %index, "ttl is 0, deleting indexed key from redis");
+            let mut pipe = redis::pipe();
+            pipe.atomic().del(self.key(key)).del(self.index_key(index));
+            let _: () = pipe.query_async(&mut conn).await.map_err(|e| {
+                tracing::error!(error = %e, "Redis del error");
+                StoreError::Internal(format!("Redis del error: {e}"))
+            })?;
             return Ok(());
         }
 
+        let ttl_ms = (ttl.as_millis() as u64).max(1);
         let mut pipe = redis::pipe();
-        pipe.atomic().set_ex(self.key(key), json, ttl_secs).set_ex(
+        pipe.atomic().pset_ex(self.key(key), json, ttl_ms).pset_ex(
             self.index_key(index),
             key.to_string(),
-            ttl_secs,
+            ttl_ms,
         );
 
         let _: () = pipe.query_async(&mut conn).await.map_err(|e| {
@@ -375,9 +426,9 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> IndexedKvStore<T> 
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, index))]
     async fn get_by_index(&self, index: &str) -> Result<Option<T>, StoreError> {
-        tracing::debug!(index = %index, "loading by index from redis store");
+        tracing::debug!("loading by index from redis store");
         let mut conn = self
             .client
             .get_multiplexed_async_connection()
@@ -572,5 +623,85 @@ mod tests {
         // This should return None and clean up the orphaned index
         let sk_res2: Option<String> = store.get_by_index("sk1").await.unwrap();
         assert_eq!(sk_res2, None);
+    }
+
+    #[tokio::test]
+    async fn test_redis_set_with_zero_ttl_deletes_and_sub_second_uses_milliseconds() {
+        let (store, _c) = setup_redis().await;
+
+        // Set with sub-second / millisecond TTL
+        store
+            .set("ms_key", "value".to_string(), Duration::from_millis(1500))
+            .await
+            .unwrap();
+
+        let mut conn = store
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .unwrap();
+        let pttl: i64 = redis::AsyncCommands::pttl(&mut conn, store.key("ms_key"))
+            .await
+            .unwrap();
+        assert!(
+            pttl > 500 && pttl <= 1500,
+            "pttl should be within 1500ms window, got {pttl}"
+        );
+
+        // Setting with zero TTL deletes key
+        store
+            .set("zero_key", "value".to_string(), Duration::from_secs(10))
+            .await
+            .unwrap();
+        let res_some: Option<String> = store.get("zero_key").await.unwrap();
+        assert_eq!(res_some, Some("value".to_string()));
+
+        store
+            .set("zero_key", "value".to_string(), Duration::ZERO)
+            .await
+            .unwrap();
+        let res_none: Option<String> = store.get("zero_key").await.unwrap();
+        assert_eq!(res_none, None);
+
+        // Setting indexed with zero TTL deletes both keys
+        store
+            .set_indexed(
+                "idx_pk",
+                "idx_sk",
+                "value".to_string(),
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        let pk_some: Option<String> = store.get("idx_pk").await.unwrap();
+        assert_eq!(pk_some, Some("value".to_string()));
+
+        store
+            .set_indexed("idx_pk", "idx_sk", "value".to_string(), Duration::ZERO)
+            .await
+            .unwrap();
+        let pk_none: Option<String> = store.get("idx_pk").await.unwrap();
+        let sk_none: Option<String> = store.get_by_index("idx_sk").await.unwrap();
+        assert_eq!(pk_none, None);
+        assert_eq!(sk_none, None);
+
+        // Positive sub-millisecond TTL rounds up to at least 1ms rather than passing 0 to PSETEX
+        store
+            .set(
+                "sub_ms_key",
+                "value".to_string(),
+                Duration::from_micros(500),
+            )
+            .await
+            .unwrap();
+        store
+            .set_indexed(
+                "sub_ms_pk",
+                "sub_ms_sk",
+                "value".to_string(),
+                Duration::from_micros(500),
+            )
+            .await
+            .unwrap();
     }
 }

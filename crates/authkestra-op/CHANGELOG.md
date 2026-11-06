@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/Authkestra/authkestra/compare/authkestra-op-v0.13.3...authkestra-op-v0.14.0) - 2026-11-03
+
+### Added
+
+- *(op)* [**breaking**] issue access tokens for configured audiences ([#422](https://github.com/Authkestra/authkestra/pull/422))
+
 ## [0.13.2](https://github.com/Authkestra/authkestra/compare/authkestra-op-v0.13.1...authkestra-op-v0.13.2) - 2026-10-26
 
 ### Added

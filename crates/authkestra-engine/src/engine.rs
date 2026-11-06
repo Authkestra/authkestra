@@ -302,6 +302,32 @@ impl<S, T> Engine<S, T> {
             }
             tracing::Span::current().record("auth_method", method_name);
 
+            if !token_data.claims.primary_method.is_empty()
+                && token_data.claims.primary_method == method_name
+            {
+                tracing::warn!(
+                    method = method_name,
+                    primary_method = %token_data.claims.primary_method,
+                    "MFA continuation attempted with the same method as primary authentication"
+                );
+                return Err(AuthError::InvalidInput);
+            }
+
+            if !token_data.claims.allowed_methods.is_empty()
+                && !token_data
+                    .claims
+                    .allowed_methods
+                    .iter()
+                    .any(|m| m == method_name)
+            {
+                tracing::warn!(
+                    method = method_name,
+                    allowed_methods = ?token_data.claims.allowed_methods,
+                    "MFA continuation method is not in allowed methods for this challenge"
+                );
+                return Err(AuthError::InvalidInput);
+            }
+
             let method = self
                 .auth_methods
                 .get(method_name)
@@ -414,7 +440,15 @@ impl<S, T> Engine<S, T> {
                 continue;
             }
             if !enrolled_methods.contains(name)
-                && m.has_enrolled(&identity.external_id).await.unwrap_or(false)
+                && m.has_enrolled(&identity.external_id).await.map_err(|e| {
+                    tracing::error!(
+                        error = %e,
+                        method = %name,
+                        user_id = %identity.external_id,
+                        "failed to check MFA enrollment status in credential store"
+                    );
+                    e
+                })?
             {
                 enrolled_methods.push(name.clone());
             }
@@ -457,7 +491,8 @@ impl<S, T> Engine<S, T> {
                 identity.external_id.clone(),
                 exp.timestamp() as usize,
                 method_name,
-            );
+            )
+            .with_allowed_methods(enrolled_methods.clone());
 
             let mfa_token = jsonwebtoken::encode(
                 &jsonwebtoken::Header::default(),
@@ -531,7 +566,7 @@ impl<T> Engine<Configured<Arc<dyn SessionStore>>, T> {
             expires_at: chrono::Utc::now() + session_duration,
         };
 
-        tracing::debug!(session_id = %session.id, "creating new session");
+        tracing::debug!("creating new session");
 
         self.session_store
             .0
@@ -542,7 +577,7 @@ impl<T> Engine<Configured<Arc<dyn SessionStore>>, T> {
                 AuthError::Session(e.to_string())
             })?;
 
-        tracing::info!(session_id = %session.id, "session created successfully");
+        tracing::info!("session created successfully");
         Ok(session)
     }
 }

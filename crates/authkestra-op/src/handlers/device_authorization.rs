@@ -200,7 +200,10 @@ mod tests {
             authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new();
         let codes =
             authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new();
-        let tokens = TokenManager::new(b"super_secret_key_that_is_long_enough_for_hmac", None);
+        let tokens = TokenManager::new(
+            b"super_secret_key_that_is_long_enough_for_hmac",
+            Some(config.issuer.clone()),
+        );
 
         clients
             .set(

@@ -41,7 +41,9 @@ middleware" split as the rest of this chapter:
 - **Axum** (`authkestra-axum`, `devsig` feature): `DeviceSignatureLayer` is a `tower::Layer` that
   buffers the request body ahead of axum's own extraction (needed for the `bdh` body-hash
   check), calls `authkestra_devsig::verify`, and injects the verified identity into request
-  extensions on success — or short-circuits with `401`/`413` on failure. The
+  extensions on success — or short-circuits with `401`/`413` on failure, answering in
+  device-signature profile v1's shape (a JSON body `{"error": "<code>"}` and a
+  `WWW-Authenticate: DeviceSignature` challenge; see `docs/rfc-014-devsig-profile-v1.md`). The
   `AuthDeviceSignature` extractor reads that identity back out via `FromRequestParts`. See
   `crates/authkestra/examples/axum_devsig/` for a runnable example.
 - **Actix Web** (`authkestra-actix`, `devsig` feature): `DeviceSignatureAuth` is the equivalent

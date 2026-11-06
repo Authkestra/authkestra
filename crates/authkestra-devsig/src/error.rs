@@ -14,7 +14,9 @@ pub enum VerifyError {
     #[error("missing_credential: X-Signature and X-Attestation are both required")]
     MissingCredential,
 
-    /// One of the two headers is not a syntactically valid compact JWS.
+    /// One of the two headers is not a syntactically valid compact JWS, or a claim set does not
+    /// have profile v1's shape (for the attestation: `iss`, `sub`, `did`, `iat`, `exp`,
+    /// `cnf.jkt`, and an `att` that is a JSON object).
     #[error("malformed: {0}")]
     Malformed(String),
 
@@ -90,11 +92,15 @@ pub enum VerifyError {
     #[error("audience_mismatch")]
     AudienceMismatch,
 
-    /// A query string is present on the live request but `sig.qsh` disagrees (or is absent).
+    /// `sig.qsh` disagrees with the live request's query string: it is absent while a query is
+    /// present, present while there is none (profile v1: a hash on one side only is a
+    /// mismatch), or not the hex SHA-256 of the raw query.
     #[error("query_mismatch")]
     QueryMismatch,
 
-    /// A body is present on the live request but `sig.bdh` disagrees (or is absent).
+    /// `sig.bdh` disagrees with the live request's body: it is absent while a body is present,
+    /// present while the body is empty (profile v1: the body was stripped in transit), or not the
+    /// hex SHA-256 of the raw body bytes.
     #[error("body_mismatch")]
     BodyMismatch,
 

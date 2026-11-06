@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use cedar_policy::{Entities, Entity, EntityUid, RestrictedExpression, Schema};
+use cedar_policy::{Entities, Entity, EntityUid, EvalResult, RestrictedExpression, Schema};
 
 use crate::error::PolicyError;
 use crate::request::AuthorizationRequest;
@@ -98,21 +98,29 @@ pub struct EntityRecord {
     uid: EntityUid,
     attributes: HashMap<String, RestrictedExpression>,
     parents: HashSet<EntityUid>,
+    tags: HashMap<String, RestrictedExpression>,
 }
 
 impl EntityRecord {
-    /// A record with no attributes and no parents.
+    /// A record with no attributes, no tags, and no parents.
     pub fn new(uid: EntityUid) -> Self {
         Self {
             uid,
             attributes: HashMap::new(),
             parents: HashSet::new(),
+            tags: HashMap::new(),
         }
     }
 
     /// Add an attribute, e.g. `.attribute("owner", RestrictedExpression::new_string("alice"))`.
     pub fn attribute(mut self, name: impl Into<String>, value: RestrictedExpression) -> Self {
         self.attributes.insert(name.into(), value);
+        self
+    }
+
+    /// Add a tag, e.g. `.with_tag("env", RestrictedExpression::new_string("prod"))`.
+    pub fn with_tag(mut self, name: impl Into<String>, value: RestrictedExpression) -> Self {
+        self.tags.insert(name.into(), value);
         self
     }
 
@@ -128,10 +136,11 @@ impl EntityRecord {
     }
 
     fn to_entity(&self) -> Result<Entity, PolicyError> {
-        Entity::new(
+        Entity::new_with_tags(
             self.uid.clone(),
             self.attributes.clone(),
             self.parents.clone(),
+            self.tags.clone(),
         )
         .map_err(|e| {
             PolicyError::Entities(format!("entity {} has an invalid attribute: {e}", self.uid))
@@ -249,6 +258,47 @@ impl ResourceLoader for MemoryResourceLoader {
                         "entity could not be converted for evaluation; abandoning this request"
                     );
                 })?;
+
+                // Recursively inspect entity attributes and tags to extract all referenced entity UIDs
+                // (and transitively their parents and dependencies) so forbid and permit policies evaluate correctly.
+                let mut attr_uids = Vec::new();
+                for (attr_name, attr_val) in entity.attrs() {
+                    match attr_val {
+                        Ok(eval_res) => {
+                            extract_referenced_uids_from_eval_result(&eval_res, &mut attr_uids);
+                        }
+                        Err(_) => {
+                            tracing::debug!(
+                                entity = %uid,
+                                attr = %attr_name,
+                                "skipping entity UID extraction for unevaluated attribute"
+                            );
+                        }
+                    }
+                }
+                for (tag_name, tag_val) in entity.tags() {
+                    match tag_val {
+                        Ok(eval_res) => {
+                            extract_referenced_uids_from_eval_result(&eval_res, &mut attr_uids);
+                        }
+                        Err(_) => {
+                            tracing::debug!(
+                                entity = %uid,
+                                tag = %tag_name,
+                                "skipping entity UID extraction for unevaluated tag"
+                            );
+                        }
+                    }
+                }
+                if !attr_uids.is_empty() {
+                    tracing::debug!(
+                        entity = %uid,
+                        attr_entity_count = attr_uids.len(),
+                        "extracted referenced entity UIDs from attributes for recursive hydration"
+                    );
+                    queue.extend(attr_uids);
+                }
+
                 selected.push(entity);
             }
         }
@@ -269,6 +319,24 @@ impl ResourceLoader for MemoryResourceLoader {
             );
             PolicyError::Entities(format!("could not assemble {count} entities: {e}"))
         })
+    }
+}
+
+/// Recursively extracts all [`EntityUid`]s contained in an [`EvalResult`] (direct UIDs, sets, or records).
+fn extract_referenced_uids_from_eval_result(res: &EvalResult, out: &mut Vec<EntityUid>) {
+    match res {
+        EvalResult::EntityUid(uid) => out.push(uid.clone()),
+        EvalResult::Set(set) => {
+            for elem in set.iter() {
+                extract_referenced_uids_from_eval_result(elem, out);
+            }
+        }
+        EvalResult::Record(rec) => {
+            for (_key, val) in rec.iter() {
+                extract_referenced_uids_from_eval_result(val, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -457,5 +525,73 @@ mod tests {
     fn entity_record_exposes_its_uid() {
         let record = EntityRecord::new(uid(r#"User::"alice""#));
         assert_eq!(record.uid(), &uid(r#"User::"alice""#));
+    }
+
+    /// Tests that the memory loader recursively discovers and hydrates entities referenced in attributes, sets, and tags.
+    #[tokio::test]
+    async fn memory_loader_recursively_hydrates_attribute_entity_references_and_parents() {
+        let loader = MemoryResourceLoader::new();
+
+        // Target org and department
+        let tech_corp = uid(r#"Org::"tech_corp""#);
+        let eng_dept = uid(r#"Department::"engineering""#);
+        loader.insert(EntityRecord::new(tech_corp.clone()));
+        loader.insert(EntityRecord::new(eng_dept.clone()).parent(tech_corp.clone()));
+
+        // Standby group and bob
+        let standbys = uid(r#"Group::"standbys""#);
+        let bob = uid(r#"User::"bob""#);
+        loader.insert(EntityRecord::new(standbys.clone()));
+        loader.insert(EntityRecord::new(bob.clone()).parent(standbys.clone()));
+
+        // Alice referencing eng_dept via direct attribute, bob via a set attribute, and reviewers via a tag
+        let reviewers = uid(r#"Group::"reviewers""#);
+        loader.insert(EntityRecord::new(reviewers.clone()));
+
+        let alice_uid = uid(r#"User::"alice""#);
+        let alice = EntityRecord::new(alice_uid.clone())
+            .attribute(
+                "dept",
+                RestrictedExpression::new_entity_uid(eng_dept.clone()),
+            )
+            .attribute(
+                "delegates",
+                RestrictedExpression::new_set(vec![RestrictedExpression::new_entity_uid(
+                    bob.clone(),
+                )]),
+            )
+            .with_tag(
+                "reviewer_group",
+                RestrictedExpression::new_entity_uid(reviewers.clone()),
+            );
+        loader.insert(alice);
+
+        let req = request(r#"User::"alice""#, r#"Action::"view""#, r#"Doc::"roadmap""#);
+        let hydrated = loader
+            .load_entities(&req)
+            .await
+            .expect("hydration succeeds");
+
+        assert!(hydrated.get(&alice_uid).is_some(), "alice must be hydrated");
+        assert!(
+            hydrated.get(&eng_dept).is_some(),
+            "attribute-referenced dept must be hydrated"
+        );
+        assert!(
+            hydrated.get(&tech_corp).is_some(),
+            "parent of attribute-referenced dept must be hydrated"
+        );
+        assert!(
+            hydrated.get(&bob).is_some(),
+            "set-attribute-referenced bob must be hydrated"
+        );
+        assert!(
+            hydrated.get(&standbys).is_some(),
+            "parent of set-attribute-referenced bob must be hydrated"
+        );
+        assert!(
+            hydrated.get(&reviewers).is_some(),
+            "tag-referenced reviewers group must be hydrated"
+        );
     }
 }

@@ -1090,3 +1090,208 @@ fn test_adversarial_case_collision_invariance() {
         "'Key' (0x4B) must sort before 'key' (0x6B)"
     );
 }
+
+#[tokio::test]
+async fn approval_rejects_numbers_changed_by_canonicalization() {
+    let router = create_adversarial_router();
+    let caller = make_human_identity("numeric_caller");
+    let session = "numeric_session".to_string();
+
+    for number in [
+        json!(9007199254740993u64),
+        json!(-9007199254740993i64),
+        json!(50.0),
+        json!(-0.0),
+    ] {
+        let err = router
+            .execute_tool(
+                ToolCallParams {
+                    name: "adversarial_eval".to_string(),
+                    arguments: Some(json!({"nested": [{"number": number}]})),
+                },
+                Some(caller.clone()),
+                session.clone(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, McpError::InvalidArguments(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn approval_rejects_colliding_integer_on_redemption() {
+    let router = create_adversarial_router();
+    let caller = make_human_identity("numeric_caller");
+    let human = make_human_identity("numeric_approver");
+    let session = "numeric_session".to_string();
+    let initial = json!({"ids": [9007199254740992u64], "amount": 1.5});
+    let err = router
+        .execute_tool(
+            ToolCallParams {
+                name: "adversarial_eval".to_string(),
+                arguments: Some(initial.clone()),
+            },
+            Some(caller.clone()),
+            session.clone(),
+        )
+        .await
+        .unwrap_err();
+    let approval_id = match err {
+        McpError::StepUpRequired(e) => e.approval_id,
+        other => panic!("expected approval challenge, got {other:?}"),
+    };
+    let token = router
+        .approve_challenge(&approval_id, &human)
+        .await
+        .unwrap()
+        .execution_token;
+    let tampered =
+        json!({"ids": [9007199254740993u64], "amount": 1.5, APPROVAL_TOKEN_ARG_KEY: token});
+    let err = router
+        .execute_tool(
+            ToolCallParams {
+                name: "adversarial_eval".to_string(),
+                arguments: Some(tampered),
+            },
+            Some(caller),
+            session,
+        )
+        .await
+        .expect_err("colliding integer must not reach the handler");
+    assert!(
+        matches!(err, McpError::InvalidArguments(_)),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn legacy_approvals_and_tokens_are_not_accepted() {
+    use authkestra_engine::store::KvStore;
+    use authkestra_mcp::{ApprovedExecutionRecord, PendingApprovalChallenge};
+    use std::time::Duration;
+
+    let pending = Arc::new(MemoryStore::<PendingApprovalChallenge>::new());
+    let executions = Arc::new(MemoryStore::<ApprovedExecutionRecord>::new());
+    let router = McpRouter::builder(pending.clone(), executions.clone())
+        .tool(ToolDefinition::new(
+            "legacy_eval",
+            json!({"type": "object"}),
+            McpSecurityTier::human_approved(
+                vec!["admin:finance"],
+                ReproofRequirement::new(300).require_step_up(true),
+                300,
+            ),
+            |_, _ctx: ToolContext| async move { Ok(ToolCallResult::text("executed")) },
+        ))
+        .build();
+    let caller = make_human_identity("caller");
+    let expires_at = Utc::now().timestamp() + 300;
+    let digest = compute_challenge_digest(
+        "session",
+        "legacy_eval",
+        &canonicalize_json(&json!({"id": 9007199254740993u64})).unwrap(),
+        expires_at,
+    );
+    pending
+        .set(
+            "mcp:pending:old",
+            PendingApprovalChallenge {
+                approval_id: "old".to_string(),
+                session_id: "session".to_string(),
+                tool_name: "legacy_eval".to_string(),
+                challenge_digest: digest.clone(),
+                expires_at,
+                reproof_max_age_secs: 300,
+                reproof_require_step_up: true,
+                created_at: Utc::now().timestamp(),
+            },
+            Duration::from_secs(300),
+        )
+        .await
+        .unwrap();
+    executions
+        .set(
+            "mcp:exec:old",
+            ApprovedExecutionRecord {
+                execution_token: "old".to_string(),
+                approval_id: "old".to_string(),
+                session_id: "session".to_string(),
+                tool_name: "legacy_eval".to_string(),
+                challenge_digest: digest,
+                approver_external_id: "approver".to_string(),
+                approver_provider_id: "provider".to_string(),
+                expires_at,
+                created_at: Utc::now().timestamp(),
+            },
+            Duration::from_secs(300),
+        )
+        .await
+        .unwrap();
+
+    assert!(router
+        .query_pending_approval("old")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(router.approve_challenge("old", &caller).await.is_err());
+    let err = router
+        .execute_tool(
+            ToolCallParams {
+                name: "legacy_eval".to_string(),
+                arguments: Some(json!({"id": 9007199254740992u64, APPROVAL_TOKEN_ARG_KEY: "old"})),
+            },
+            Some(caller),
+            "session".to_string(),
+        )
+        .await
+        .expect_err("pre-upgrade token must not be redeemed");
+    assert!(matches!(err, McpError::TokenReplayOrExpired));
+}
+
+#[tokio::test]
+async fn approval_executes_unchanged_lossless_arguments() {
+    let router = create_adversarial_router();
+    let caller = make_human_identity("numeric_caller");
+    let session = "numeric_session".to_string();
+    let args = json!({"ids": [9007199254740991u64, -9007199254740991i64, "9007199254740993"], "amount": 1.5});
+    let err = router
+        .execute_tool(
+            ToolCallParams {
+                name: "adversarial_eval".to_string(),
+                arguments: Some(args.clone()),
+            },
+            Some(caller.clone()),
+            session.clone(),
+        )
+        .await
+        .unwrap_err();
+    let approval_id = match err {
+        McpError::StepUpRequired(e) => e.approval_id,
+        other => panic!("unexpected error: {other:?}"),
+    };
+    let token = router
+        .approve_challenge(&approval_id, &make_human_identity("approver"))
+        .await
+        .unwrap()
+        .execution_token;
+    let mut retry = args.clone();
+    retry
+        .as_object_mut()
+        .unwrap()
+        .insert(APPROVAL_TOKEN_ARG_KEY.to_string(), json!(token));
+    let result = router
+        .execute_tool(
+            ToolCallParams {
+                name: "adversarial_eval".to_string(),
+                arguments: Some(retry),
+            },
+            Some(caller),
+            session,
+        )
+        .await
+        .unwrap();
+    assert!(result.content[0].text.contains(&format!("{args:?}")));
+}
