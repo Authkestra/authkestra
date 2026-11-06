@@ -438,6 +438,10 @@ impl<C, A, R, D, J, P> CompositeOpStore<C, A, R, D, J, P> {
     /// client always holds a current one. A token request without a `DPoP` header is
     /// unaffected: the nonce constrains proofs, not bearer clients.
     ///
+    /// A browser client on another origin can read the header only if the host's (or the
+    /// proxy's) CORS policy lists `DPoP-Nonce` in `Access-Control-Expose-Headers` on token
+    /// responses. Without that it never sees the nonce, and every retry is refused again.
+    ///
     /// [`DpopNonces`] is stateless; give every node of a cluster the same secret
     /// ([`DpopNonces::new`]), or use [`DpopNonces::random`] on a single node.
     pub fn with_dpop_nonces(mut self, nonces: DpopNonces) -> Self {
