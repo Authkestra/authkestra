@@ -152,8 +152,8 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 pub fn jws(header: &Value, claims: &Value, key: &Key) -> String {
     let input = format!(
         "{}.{}",
-        b64url(header.to_string().as_bytes()),
-        b64url(claims.to_string().as_bytes())
+        b64url(canonical(header).as_bytes()),
+        b64url(canonical(claims).as_bytes())
     );
     let signature = crypto::sign(input.as_bytes(), &key.encoding, key.alg).expect("sign");
     format!("{input}.{signature}")
@@ -297,4 +297,26 @@ impl Mint {
                 .collect(),
         )
     }
+}
+
+/// `value` with every object's keys in ascending order, whatever map type
+/// serde_json was compiled with.
+pub fn sorted(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted).collect())
+        }
+        other => other,
+    }
+}
+
+/// The compact JSON text of `value` with sorted keys: the bytes a vector's
+/// JWS segments encode, the same under either serde_json map type.
+pub fn canonical(value: &serde_json::Value) -> String {
+    sorted(value.clone()).to_string()
 }

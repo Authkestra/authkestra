@@ -150,7 +150,10 @@ async fn verify_inner(
 
     // --- Step 8: REPLAY — fails closed: a store error rejects exactly like a genuine replay,
     // never falls back to "allow". ---
-    let ttl = Duration::from_secs((sig.exp - now).max(0) as u64);
+    // The marker must outlive the last instant the signature can still be accepted:
+    // freshness allows `now <= exp + skew`, so it lives until one second past that.
+    let skew = config.max_clock_skew.as_secs() as i64;
+    let ttl = Duration::from_secs((sig.exp + skew - now + 1).max(1) as u64);
     match replay_store.put_if_absent(&sig.jti, ttl).await {
         Ok(true) => {}
         // These two keep their own events despite the boundary above, because

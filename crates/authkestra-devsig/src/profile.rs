@@ -111,6 +111,10 @@ impl Refusal {
 
 impl VerifyError {
     /// The profile v1 refusal for this rejection: its status, code and challenge.
+    ///
+    /// Logs nothing: `verify_at` already logs every rejection it makes, and the one this
+    /// maps to `413`, [`VerifyError::BodyTooLarge`], is logged by the adapter that refuses
+    /// the body before verification starts.
     pub fn refusal(&self) -> Refusal {
         let status = match self {
             VerifyError::BodyTooLarge(_) => 413,

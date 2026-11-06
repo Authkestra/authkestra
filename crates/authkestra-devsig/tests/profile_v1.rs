@@ -90,6 +90,18 @@ impl Vector {
         self
     }
 
+    /// Only `X-Attestation`: the attestation is public, so alone it must not authenticate.
+    fn only_attestation(mut self, attestation: String) -> Self {
+        self.attestation = Some(attestation);
+        self
+    }
+
+    /// Only `X-Signature`: a signature by a key no issuer bound to anyone.
+    fn only_signature(mut self, signature: String) -> Self {
+        self.signature = Some(signature);
+        self
+    }
+
     fn accept(mut self, device: &Key, role: &str) -> Self {
         self.expect = json!({
             "outcome": "accept",
@@ -258,8 +270,10 @@ fn vectors(m: &Mint) -> Vec<Vector> {
         },
         // --- Presence ---
         Vector::new("missing-signature", "Only the attestation: it is public, so alone it is a bearer token.", "GET", "/accounts")
+            .only_attestation(att.clone())
             .refuse("missing_credential"),
         Vector::new("missing-attestation", "Only the signature: an anonymous key.", "GET", "/accounts")
+            .only_signature(get("jti-missing-attestation"))
             .refuse("missing_credential"),
         Vector::new("empty-signature-header", "An empty header is an absent credential, not a malformed one.", "GET", "/accounts")
             .signed(String::new(), att.clone())
@@ -282,8 +296,8 @@ fn vectors(m: &Mint) -> Vec<Vector> {
                 let claims = m.attestation_claims(&m.device);
                 format!(
                     "{}.{}.{}",
-                    b64url(json!({ "alg": "none", "kid": m.es256.kid }).to_string().as_bytes()),
-                    b64url(claims.to_string().as_bytes()),
+                    b64url(canonical(&json!({ "alg": "none", "kid": m.es256.kid })).as_bytes()),
+                    b64url(canonical(&claims).as_bytes()),
                     b64url(b"not-a-signature"),
                 )
             })
@@ -294,8 +308,8 @@ fn vectors(m: &Mint) -> Vec<Vector> {
                     let claims = m.signature_claims("jti-bad-alg-hs256", "GET", "/accounts", None, None);
                     let input = format!(
                         "{}.{}",
-                        b64url(json!({ "alg": "HS256", "jwk": m.device.jwk }).to_string().as_bytes()),
-                        b64url(claims.to_string().as_bytes()),
+                        b64url(canonical(&json!({ "alg": "HS256", "jwk": m.device.jwk })).as_bytes()),
+                        b64url(canonical(&claims).as_bytes()),
                     );
                     let mac = jsonwebtoken::crypto::sign(input.as_bytes(), &jsonwebtoken::EncodingKey::from_secret(b"shared"), Algorithm::HS256).expect("hmac");
                     format!("{input}.{mac}")
@@ -352,7 +366,7 @@ fn vectors(m: &Mint) -> Vec<Vector> {
                 let signed = get("jti-bad-signature");
                 let parts: Vec<&str> = signed.split('.').collect();
                 let edited = m.signature_claims("jti-bad-signature-edited", "GET", "/accounts", None, None);
-                format!("{}.{}.{}", parts[0], b64url(edited.to_string().as_bytes()), parts[2])
+                format!("{}.{}.{}", parts[0], b64url(canonical(&edited).as_bytes()), parts[2])
             }, att.clone())
             .refuse("bad_signature"),
         // --- Freshness ---
@@ -443,7 +457,11 @@ fn generate() -> String {
         },
         "vectors": vectors(&m).iter().map(Vector::to_json).collect::<Vec<_>>(),
     });
-    let mut text = serde_json::to_string_pretty(&file).expect("serialize vectors");
+    // Keys are sorted here, not by serde_json: a workspace build with
+    // `--all-features` turns on serde_json's `preserve_order`, which would
+    // otherwise write maps in insertion order and make the file depend on
+    // how the tests are compiled.
+    let mut text = serde_json::to_string_pretty(&sorted(file)).expect("serialize vectors");
     text.push('\n');
     text
 }
@@ -630,6 +648,36 @@ async fn an_accepted_vector_is_refused_a_second_time() {
         .expect("first use is accepted");
     assert_eq!(
         verify_at(&signed, &config, &jwks, &store, now).await,
+        Err(VerifyError::ReplayDetected)
+    );
+}
+
+#[tokio::test]
+async fn a_replay_inside_the_clock_tolerance_after_exp_is_refused() {
+    // A signature stays acceptable until `exp + skew`, so its replay marker must outlive
+    // `exp` by the skew too; a marker that expired at `exp` let the same request through
+    // again for the whole tolerance.
+    let file = load();
+    let (config, jwks) = (config(&file), jwks(&file).await);
+    let vector = &file["vectors"][0];
+    let request = &vector["request"];
+    let signed = SignedRequest {
+        signature: header(&request["headers"], "X-Signature"),
+        attestation: header(&request["headers"], "X-Attestation"),
+        method: request["method"].as_str().expect("method"),
+        path: request["path"].as_str().expect("path"),
+        query: request["query"].as_str(),
+        body: request["body"].as_str().map(str::as_bytes),
+    };
+    // The vector's signature expires 110 s after its `now`; 20 s later it is inside the
+    // 30 s tolerance.
+    let after_exp = vector_now(vector) + Duration::from_secs(110 + 20);
+    let store = InMemoryReplayStore::new();
+    verify_at(&signed, &config, &jwks, &store, after_exp)
+        .await
+        .expect("inside the tolerance the signature is still accepted");
+    assert_eq!(
+        verify_at(&signed, &config, &jwks, &store, after_exp).await,
         Err(VerifyError::ReplayDetected)
     );
 }

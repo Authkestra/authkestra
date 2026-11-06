@@ -205,6 +205,11 @@ async fn authenticate(shared: &Shared, req: Request<Body>) -> Result<Request<Bod
         Ok(collected) => collected.to_bytes(),
         Err(_) => {
             tracing::warn!(target: "authkestra_devsig", max_body_size = shared.max_body_size, "rejecting request: body exceeds configured maximum");
+            tracing::info!(
+                target: "authkestra_devsig",
+                limit = shared.max_body_size,
+                "device-signature request body over the limit; answering 413"
+            );
             return Err(reject(VerifyError::BodyTooLarge(shared.max_body_size)));
         }
     };
@@ -287,18 +292,32 @@ fn reject(err: VerifyError) -> Box<Response> {
 /// );
 /// ```
 pub fn refusal_response(refusal: Refusal) -> Response {
-    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::UNAUTHORIZED);
+    let status = StatusCode::from_u16(refusal.status).unwrap_or_else(|_| {
+        tracing::warn!(
+            target: "authkestra_devsig",
+            status = refusal.status,
+            code = refusal.error,
+            "invalid refusal status; answering 401"
+        );
+        StatusCode::UNAUTHORIZED
+    });
     let mut response = (
         status,
         [(CONTENT_TYPE, HeaderValue::from_static(REFUSAL_CONTENT_TYPE))],
         refusal.body(),
     )
         .into_response();
-    if let Some(challenge) = refusal
-        .www_authenticate()
-        .and_then(|challenge| HeaderValue::from_str(&challenge).ok())
-    {
-        response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
+    if let Some(challenge) = refusal.www_authenticate() {
+        match HeaderValue::from_str(&challenge) {
+            Ok(value) => {
+                response.headers_mut().insert(WWW_AUTHENTICATE, value);
+            }
+            Err(_) => tracing::warn!(
+                target: "authkestra_devsig",
+                code = refusal.error,
+                "refusal challenge is not a valid header value; omitting WWW-Authenticate"
+            ),
+        }
     }
     response
 }

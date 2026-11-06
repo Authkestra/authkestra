@@ -463,7 +463,9 @@
       },
       "request": {
         "body": null,
-        "headers": {},
+        "headers": {
+          "X-Attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci1lczI1Ni0yMDI3IiwidHlwIjoid2ViYW5rLWF0dGVzdCtqd3MifQ.eyJhdHQiOnsic3RhdHVzIjoiYWN0aXZlIn0sImNuZiI6eyJqa3QiOiJrRGZObk14Z2ZBSURVR1Q1Umc4cG9GUF9jbEU0bEVPS3pKS3JiYjFlbDlRIn0sImRpZCI6ImRldi04ODIxYmMwNCIsImV4cCI6MTc5ODg0NDQwMCwiaWF0IjoxNzk4NzU4MDAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci03ZjNhOWMxMiJ9.OAnLUKsQktppMDZiQGMRE636yODtqE5jeZxsjMe2cwuFjbwmhj3zTimc5HFdsGTz8jGSyNWNVO4TIO_uKhjStw"
+        },
         "method": "GET",
         "path": "/accounts",
         "query": null
@@ -489,7 +491,9 @@
       },
       "request": {
         "body": null,
-        "headers": {},
+        "headers": {
+          "X-Signature": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImF2aDBON1gxX1NIS1VVTUJ1TVBOX3ZNblBxbzNpQjRuMF9HWng2Z2R4am8iLCJ5IjoiVlJ1Sy04MHMzd2g3bnlyY0NSb0pOclFXcFVoR0FLdG9OSzJvRWtZck4wMCJ9fQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlIiwiZXhwIjoxNzk4NzYxNzEwLCJpYXQiOjE3OTg3NjE1OTAsImp0aSI6Imp0aS1taXNzaW5nLWF0dGVzdGF0aW9uIiwibXRoIjoiR0VUIiwicHRoIjoiL2FjY291bnRzIn0.xXCUrfwWLHcTIBBRaJ9Gh4myM75xqwerlVECWiZwVFfanIQd4wQI6FnA4HIqdYb4JTdT9GCnl1EkiYF9k96EyQ"
+        },
         "method": "GET",
         "path": "/accounts",
         "query": null
