@@ -40,6 +40,10 @@ pub const DEFAULT_NONCE_WINDOW: Duration = Duration::from_secs(300);
 /// eight bytes.
 const DOMAIN: &[u8] = b"authkestra-dpop-nonce-v1";
 
+/// How far a node's clock may run ahead of another's that shares the secret: a nonce
+/// for the next window is accepted this close to the boundary, and no earlier.
+pub const NODE_CLOCK_SKEW: Duration = Duration::from_secs(30);
+
 /// Bytes of the MAC kept in a nonce: 128 bits, far beyond what an online guess can reach in a
 /// window.
 const MAC_LEN: usize = 16;
@@ -116,7 +120,8 @@ impl DpopNonces {
     }
 
     /// Whether `nonce` is acceptable at the Unix time `now`: issued under this secret, in the
-    /// current window or the one before.
+    /// current window or the one before, or in the next one when `now` is within
+    /// [`NODE_CLOCK_SKEW`] of its start (a node whose clock runs ahead issued it).
     pub fn accepts_at(&self, nonce: &str, now: i64) -> bool {
         let Ok(bytes) = URL_SAFE_NO_PAD.decode(nonce) else {
             return false;
@@ -128,7 +133,16 @@ impl DpopNonces {
         window.copy_from_slice(&bytes[..8]);
         let window = u64::from_be_bytes(window);
         let current = self.window_of(now);
-        if window != current && Some(window) != current.checked_sub(1) {
+        let next_is_near = current
+            .checked_add(1)
+            .and_then(|next| next.checked_mul(self.window_secs))
+            .is_some_and(|start| {
+                start.saturating_sub(u64::try_from(now).unwrap_or(0)) <= NODE_CLOCK_SKEW.as_secs()
+            });
+        let in_range = window == current
+            || Some(window) == current.checked_sub(1)
+            || (next_is_near && Some(window) == current.checked_add(1));
+        if !in_range {
             return false;
         }
         let expected = URL_SAFE_NO_PAD.encode(self.mac(window));
@@ -140,6 +154,9 @@ impl DpopNonces {
     }
 
     fn mac(&self, window: u64) -> [u8; MAC_LEN] {
+        // INVARIANT: `new_from_slice` fails only for MACs with a fixed key size. HMAC takes
+        // a key of any length (it hashes a longer one and pads a shorter one), so this
+        // cannot fail.
         let mut mac =
             Hmac::<Sha256>::new_from_slice(&self.key).expect("HMAC accepts a key of any length");
         mac.update(DOMAIN);
@@ -190,7 +207,24 @@ mod tests {
         assert!(n.accepts_at(&nonce, start + 300));
         assert!(n.accepts_at(&nonce, start + 599));
         assert!(!n.accepts_at(&nonce, start + 600));
-        assert!(!n.accepts_at(&nonce, start - 1), "not before it was issued");
+        assert!(
+            !n.accepts_at(&nonce, start - 31),
+            "not long before it was issued"
+        );
+    }
+
+    #[test]
+    fn a_node_whose_clock_runs_ahead_is_tolerated_near_the_boundary_only() {
+        // Another node, 20 s ahead, already issued a nonce for the next window.
+        let n = nonces();
+        let start = T - T % 300;
+        let from_the_next_window = n.issue_at(start + 300);
+        assert!(n.accepts_at(&from_the_next_window, start + 300 - 20));
+        assert!(n.accepts_at(&from_the_next_window, start + 300 - 30));
+        assert!(!n.accepts_at(&from_the_next_window, start + 300 - 31));
+        // Two windows ahead is never accepted.
+        let two_ahead = n.issue_at(start + 600);
+        assert!(!n.accepts_at(&two_ahead, start + 300 - 1));
     }
 
     #[test]

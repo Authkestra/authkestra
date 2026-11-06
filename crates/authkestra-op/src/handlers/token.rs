@@ -308,8 +308,11 @@ pub async fn handle_token_with_client_cert(
         // RFC 9449 §8: when this server issues nonces, a proof must carry a
         // current one. Checked after the proof verified (so the claim read
         // here is covered by its signature) and before its `jti` is
-        // recorded, so the refusal does not burn the client's proof id —
-        // not that it matters for safety, the retry carries a new proof.
+        // recorded, so the refusal does not burn the DPoP proof id. A
+        // `private_key_jwt` client assertion is already spent by
+        // `authenticate_client` above, so the retry must carry a fresh
+        // `client_assertion` as well as a fresh proof (RFC 7523 §3 asks for
+        // a unique `jti` per assertion anyway).
         // The adapters attach a fresh `DPoP-Nonce` to this refusal.
         if let Some(nonces) = op_store.dpop_nonces() {
             let presented = authkestra_engine::token::dpop_nonce::dpop_proof_nonce(proof);
