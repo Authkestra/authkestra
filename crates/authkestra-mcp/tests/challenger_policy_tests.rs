@@ -14,12 +14,12 @@ use std::sync::Arc;
 async fn test_challenger_execute_tool_strictly_unauthorized_on_deny() {
     let policies = r#"
         permit(
-            principal == User::"github|alice",
+            principal == User::"github:alice",
             action == Action::"call",
             resource == Tool::"transfer_funds"
         );
         forbid(
-            principal == User::"github|mallory",
+            principal == User::"github:mallory",
             action,
             resource
         );

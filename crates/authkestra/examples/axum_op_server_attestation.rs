@@ -74,11 +74,17 @@ impl SecondFactorVerifier for DemoOtpVerifier {
 async fn main() {
     let _ = tracing_subscriber::fmt::try_init();
 
+    let issuer = "https://op.example.test".to_string();
+    // The token manager's `iss` claim must equal `OpConfig::issuer` below, or relying parties
+    // reject the tokens this OP mints.
     let engine = Authkestra::builder()
         .session_store(Arc::new(MemoryStore::<
             authkestra_engine::auth::session::Session,
         >::new()))
-        .jwt_secret(b"example-only-32-byte-secret-key")
+        .token_manager(Arc::new(authkestra::core::TokenManager::new(
+            b"example-only-32-byte-secret-key",
+            Some(issuer.clone()),
+        )))
         .build();
 
     let op_store: Arc<dyn authkestra_op::CloneableOpStore> = Arc::new(CompositeOpStore::new(
@@ -91,7 +97,7 @@ async fn main() {
     let state = Op::builder()
         .engine(engine)
         .config(authkestra_op::config::OpConfig {
-            issuer: "https://op.example.test".to_string(),
+            issuer,
             scopes_supported: vec![],
             response_types_supported: vec![],
             grant_types_supported: vec![],

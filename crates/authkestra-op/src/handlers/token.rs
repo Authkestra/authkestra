@@ -7,12 +7,220 @@ use crate::error::OpError;
 use crate::refresh::RefreshToken;
 use crate::store::OpStore;
 use authkestra_engine::token::cert_binding::x5t_s256_thumbprint;
-use authkestra_engine::token::TokenManager;
+use authkestra_engine::token::{Audience, Claims, TokenManager};
 use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
+
+fn user_token_audience(client_id: &str, allowed_audiences: &[String]) -> Audience {
+    match allowed_audiences {
+        [] => {
+            tracing::debug!(
+                "No resource audiences configured; defaulting access token audience to client_id"
+            );
+            Audience::Single(client_id.to_string())
+        }
+        [audience] => {
+            tracing::debug!("Selected the configured access token audience");
+            Audience::Single(audience.clone())
+        }
+        audiences => {
+            tracing::debug!(
+                audience_count = audiences.len(),
+                "Selected configured access token audiences"
+            );
+            Audience::Multiple(audiences.to_vec())
+        }
+    }
+}
+
+/// The `iss` of the access tokens this OP issues: the token manager's issuer when it has one,
+/// since it checks that issuer on every token it validates later (refresh, token exchange), and
+/// otherwise the OP's own, so a manager built without one (`.jwt_secret(...)`) still issues
+/// RFC 9068 access tokens.
+fn access_token_issuer<'a>(tokens: &'a TokenManager, config: &'a OpConfig) -> &'a str {
+    match tokens.issuer() {
+        Some(issuer) => {
+            tracing::debug!("Access token issuer taken from the token manager");
+            issuer
+        }
+        None => {
+            tracing::debug!("Token manager has no issuer; access token issuer taken from OpConfig");
+            &config.issuer
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubjectTokenClientBinding {
+    Audience,
+    SignedClientId,
+}
+
+fn subject_token_client_binding(
+    token: &str,
+    claims: &Claims,
+    subject_token_type: &str,
+    client_id: &str,
+) -> Option<SubjectTokenClientBinding> {
+    if claims
+        .aud
+        .as_ref()
+        .is_some_and(|aud| aud.contains(client_id))
+    {
+        return Some(SubjectTokenClientBinding::Audience);
+    }
+
+    (subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+        && jsonwebtoken::decode_header(token)
+            .ok()
+            .is_some_and(|header| header.typ.as_deref() == Some("at+jwt"))
+        && claims
+            .extra
+            .get("client_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(client_id))
+    .then_some(SubjectTokenClientBinding::SignedClientId)
+}
+
+fn subject_token_dpop_binding_matches(claims: &Claims, dpop_jkt: Option<&str>) -> bool {
+    claims
+        .extra
+        .get("cnf")
+        .and_then(|cnf| cnf.get("jkt"))
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|expected_jkt| dpop_jkt == Some(expected_jkt))
+}
+
+#[cfg(test)]
+mod user_token_audience_tests {
+    use super::{
+        subject_token_client_binding, subject_token_dpop_binding_matches, user_token_audience,
+        SubjectTokenClientBinding, TokenManager,
+    };
+    use authkestra_engine::token::Audience;
+
+    #[test]
+    fn uses_configured_audiences_and_preserves_the_empty_default() {
+        assert_eq!(
+            user_token_audience("app", &[]),
+            Audience::Single("app".to_string())
+        );
+        assert_eq!(
+            user_token_audience("app", &["api".to_string()]),
+            Audience::Single("api".to_string())
+        );
+        assert_eq!(
+            user_token_audience("app", &["api".to_string(), "ledger".to_string()]),
+            Audience::Multiple(vec!["api".to_string(), "ledger".to_string()])
+        );
+    }
+
+    #[test]
+    fn token_exchange_binding_accepts_only_the_matching_access_token_client() {
+        use authkestra_engine::auth::state::Identity;
+        use authkestra_engine::token::Audience;
+        use std::collections::HashMap;
+
+        let tokens = TokenManager::new(b"token-exchange-test-secret", Some("issuer".into()));
+        let access_token = tokens
+            .issue_access_token(
+                "issuer",
+                Identity {
+                    provider_id: "test".into(),
+                    external_id: "user-1".into(),
+                    email: None,
+                    username: None,
+                    attributes: HashMap::new(),
+                },
+                "client-a",
+                Audience::Single("resource-api".into()),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .expect("issue access token");
+        let claims = tokens
+            .validate_token(&access_token, None)
+            .expect("validate access token");
+        let access_token_type = "urn:ietf:params:oauth:token-type:access_token";
+
+        assert_eq!(
+            subject_token_client_binding(&access_token, &claims, access_token_type, "client-a"),
+            Some(SubjectTokenClientBinding::SignedClientId)
+        );
+        assert_eq!(
+            subject_token_client_binding(&access_token, &claims, access_token_type, "client-b"),
+            None
+        );
+        assert_eq!(
+            subject_token_client_binding(
+                &access_token,
+                &claims,
+                "urn:ietf:params:oauth:token-type:id_token",
+                "client-a"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn token_exchange_requires_the_subject_tokens_dpop_key() {
+        use authkestra_engine::auth::state::Identity;
+        use std::collections::HashMap;
+
+        let tokens = TokenManager::new(b"dpop-binding-test-secret", Some("issuer".into()));
+        let bound = tokens
+            .issue_access_token(
+                "issuer",
+                Identity {
+                    provider_id: "test".into(),
+                    external_id: "user-1".into(),
+                    email: None,
+                    username: None,
+                    attributes: HashMap::new(),
+                },
+                "client-a",
+                Audience::Single("resource-api".into()),
+                3600,
+                None,
+                HashMap::from([("cnf".to_string(), serde_json::json!({"jkt": "key-a"}))]),
+            )
+            .unwrap();
+        let bound_claims = tokens.validate_token(&bound, None).unwrap();
+        assert!(!subject_token_dpop_binding_matches(&bound_claims, None));
+        assert!(!subject_token_dpop_binding_matches(
+            &bound_claims,
+            Some("key-b")
+        ));
+        assert!(subject_token_dpop_binding_matches(
+            &bound_claims,
+            Some("key-a")
+        ));
+
+        let unbound = tokens
+            .issue_access_token(
+                "issuer",
+                Identity {
+                    provider_id: "test".into(),
+                    external_id: "user-1".into(),
+                    email: None,
+                    username: None,
+                    attributes: HashMap::new(),
+                },
+                "client-a",
+                Audience::Single("resource-api".into()),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let unbound_claims = tokens.validate_token(&unbound, None).unwrap();
+        assert!(subject_token_dpop_binding_matches(&unbound_claims, None));
+    }
+}
 
 /// Request payload for the token endpoint.
 #[derive(Debug, Deserialize, Clone)]
@@ -311,8 +519,13 @@ pub async fn handle_token_with_client_cert(
         // same jti could be replayed after its record expired but before
         // `verify_dpop_proof` would independently reject it as stale. The
         // extra second guards the exact boundary instant itself.
-        let expires_at = chrono::DateTime::<Utc>::from_timestamp(verified.iat, 0)
-            .unwrap_or_else(Utc::now)
+        let iat_dt = chrono::DateTime::<Utc>::from_timestamp(verified.iat, 0).ok_or_else(|| {
+            TokenErrorResponse {
+                error: "invalid_dpop_proof".to_string(),
+                error_description: "The presented DPoP proof is invalid".to_string(),
+            }
+        })?;
+        let expires_at = iat_dt
             + chrono::Duration::seconds(crate::dpop::DPOP_PROOF_MAX_AGE_SECS)
             + chrono::Duration::seconds(1);
         match op_store
@@ -722,11 +935,13 @@ async fn handle_device_code(
                 let mut extra = HashMap::new();
                 merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
-                let access_token = match tokens.issue_user_token_with_extra(
+                let access_token = match tokens.issue_access_token(
+                    access_token_issuer(tokens, config),
                     identity.clone(),
+                    &client_id,
+                    user_token_audience(&client_id, &client.allowed_audiences),
                     expires_in,
                     scope_opt.clone(),
-                    Some(client_id.clone()),
                     extra,
                 ) {
                     Ok(t) => t,
@@ -973,11 +1188,13 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
     let mut extra = HashMap::new();
     merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
-    let access_token = match tokens.issue_user_token_with_extra(
+    let access_token = match tokens.issue_access_token(
+        access_token_issuer(tokens, config),
         auth_code.identity.clone(),
+        &client_id,
+        user_token_audience(&client_id, &client.allowed_audiences),
         expires_in,
         scope_opt.clone(),
-        Some(client_id.clone()),
         extra,
     ) {
         Ok(t) => t,
@@ -1580,11 +1797,13 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
     let mut extra = HashMap::new();
     merge_dpop_cnf(&mut extra, jkt.as_deref());
 
-    let access_token = match tokens.issue_user_token_with_extra(
+    let access_token = match tokens.issue_access_token(
+        access_token_issuer(tokens, config),
         old_rt.identity.clone(),
+        &client_id,
+        user_token_audience(&client_id, &client.allowed_audiences),
         expires_in,
         scope_opt.clone(),
-        Some(client_id.clone()),
         extra,
     ) {
         Ok(t) => t,
@@ -1668,8 +1887,6 @@ pub async fn default_handle_token_exchange(
     tokens: &TokenManager,
 ) -> Result<TokenResponse, TokenErrorResponse> {
     use crate::client::GrantType;
-    use authkestra_engine::token::Claims;
-
     // Captured up front: several `req` fields below are moved out
     // (`req.audience`, `req.scope`) before the access token is issued, and
     // `dpop_jkt` is needed at that point.
@@ -1750,16 +1967,21 @@ pub async fn default_handle_token_exchange(
         }
     };
 
-    // Audience Binding: this client must be a member of the subject token's
-    // `aud` claim, which per RFC 7519 §4.1.3 may be a single string or an
-    // array of strings (e.g. a Keycloak realm with multiple
-    // `oidc-audience-mapper` entries). `azp` is not read here — this crate's
-    // `Claims` has no such field, and there is no dedicated `azp` check.
-    let is_intended_aud = claims
-        .aud
-        .as_ref()
-        .is_some_and(|aud| aud.contains(&client_id));
-    if !is_intended_aud {
+    if !subject_token_dpop_binding_matches(&claims, dpop_jkt.as_deref()) {
+        tracing::warn!(client_id = %client_id, "Subject token is DPoP-bound but the exchange proof key does not match");
+        return Err(TokenErrorResponse {
+            error: "invalid_dpop_proof".to_string(),
+            error_description: "The subject token is bound to a different DPoP key".to_string(),
+        });
+    }
+
+    // Bind the exchange to the requesting client through `aud`, or through
+    // the signed `client_id` on this issuer's RFC 9068 access tokens.
+    let client_binding =
+        subject_token_client_binding(subject_token_str, &claims, subject_token_type, &client_id);
+    if let Some(binding) = client_binding {
+        tracing::debug!(?binding, "Subject token authorized for client exchange");
+    } else {
         tracing::error!(
             client_id = %client_id,
             "Client is not authorized to exchange this token"
@@ -1944,7 +2166,10 @@ mod tests {
     }
 
     pub(crate) fn test_tokens() -> TokenManager {
-        TokenManager::new(b"super_secret_key_that_is_long_enough_for_hmac", None)
+        TokenManager::new(
+            b"super_secret_key_that_is_long_enough_for_hmac",
+            Some("https://auth.example.com".to_string()),
+        )
     }
 
     fn test_identity() -> Identity {
@@ -1977,6 +2202,7 @@ mod tests {
     fn issue_subject_token_multi_aud(audiences: &[&str], scope: Option<String>) -> String {
         let now = chrono::Utc::now().timestamp() as usize;
         let raw_claims = serde_json::json!({
+            "iss": "https://auth.example.com",
             "sub": "user123",
             "aud": audiences,
             "exp": now + 3600,
@@ -3594,6 +3820,55 @@ mod tests {
             client_assertion_type: None,
             dpop_jkt: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_without_a_manager_issuer_issues_from_the_op() {
+        let clients = authkestra_engine::store::memory::MemoryStore::<ClientRegistration>::new();
+        clients
+            .set(
+                "client1",
+                refresh_test_client(),
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let mut refresh = authkestra_engine::store::memory::MemoryStore::<RefreshToken>::new();
+        refresh
+            .store_token(RefreshToken::new(
+                "rt-no-issuer".to_string(),
+                "client1".to_string(),
+                test_identity(),
+                "profile".to_string(),
+                Utc::now() + Duration::days(1),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let mut store = crate::store::CompositeOpStore::new(
+            clients,
+            authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+            refresh,
+            authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+            ),
+        );
+        // What `.jwt_secret(...)` builds: a token manager without an issuer.
+        let tokens = TokenManager::new(b"test-secret", None);
+        let response = default_handle_refresh_token(
+            refresh_test_req("rt-no-issuer"),
+            "client1".to_string(),
+            refresh_test_client(),
+            &test_config(false),
+            &mut store,
+            &tokens,
+        )
+        .await
+        .expect("the OP's issuer stands in for the manager's");
+
+        let claims = tokens.validate_token(&response.access_token, None).unwrap();
+        assert_eq!(claims.iss, Some(test_config(false).issuer));
     }
 
     #[tokio::test]
@@ -5700,6 +5975,101 @@ mod tests {
 
         // --- Refresh token DPoP key continuity (RFC 9449 §5) ---
 
+        /// RFC 9449 §6.1, through the token endpoint: a DPoP-bound subject
+        /// token is exchanged only with a verified proof for its own key, so a
+        /// stolen bound token cannot be traded for a fresh one.
+        #[tokio::test]
+        async fn token_exchange_of_a_bound_subject_token_requires_its_dpop_key() {
+            let tokens = test_tokens();
+            let holder = DpopProofBuilder::with_key_seed(
+                31,
+                "https://auth.example.com/token",
+                "jti-exchange-holder",
+            );
+            let subject_token = tokens
+                .issue_access_token(
+                    "https://auth.example.com",
+                    test_identity(),
+                    "client1",
+                    Audience::Single("client1".to_string()),
+                    3600,
+                    Some("profile".to_string()),
+                    HashMap::from([(
+                        "cnf".to_string(),
+                        serde_json::json!({"jkt": holder.expected_jkt()}),
+                    )]),
+                )
+                .unwrap();
+
+            let clients = authkestra_engine::store::memory::MemoryStore::<
+                crate::client::ClientRegistration,
+            >::new();
+            clients
+                .set(
+                    "client1",
+                    ClientRegistration {
+                        client_id: "client1".to_string(),
+                        client_secret_hash: None,
+                        redirect_uris: vec![],
+                        grant_types: vec![GrantType::TokenExchange],
+                        scopes: vec!["profile".to_string()],
+                        require_pkce: false,
+                        allowed_audiences: vec![],
+                        token_endpoint_auth_method: None,
+                        jwks: None,
+                    },
+                    std::time::Duration::from_secs(31536000),
+                )
+                .await
+                .unwrap();
+            let mut store = crate::store::CompositeOpStore::new(
+                clients,
+                authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+                authkestra_engine::store::memory::MemoryStore::<RefreshToken>::new(),
+                authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+                ),
+            )
+            .with_dpop_replay_store(authkestra_engine::store::memory::MemoryStore::<
+                DpopJtiRecord,
+            >::new());
+
+            let other_key = DpopProofBuilder::with_key_seed(
+                32,
+                "https://auth.example.com/token",
+                "jti-exchange-other",
+            );
+            for (what, proof) in [
+                ("no proof", None),
+                ("another key's proof", Some(other_key.build())),
+            ] {
+                let err = handle_token_with_client_cert(
+                    default_tx_req(&subject_token),
+                    None,
+                    &test_config(true),
+                    &mut store,
+                    &tokens,
+                    None,
+                    proof.as_deref(),
+                )
+                .await
+                .expect_err(what);
+                assert_eq!(err.error, "invalid_dpop_proof", "{what}");
+            }
+
+            let exchanged = handle_token_with_client_cert(
+                default_tx_req(&subject_token),
+                None,
+                &test_config(true),
+                &mut store,
+                &tokens,
+                None,
+                Some(&holder.build()),
+            )
+            .await
+            .expect("the key holder's proof must be accepted");
+            assert_eq!(exchanged.token_type, "DPoP");
+        }
+
         /// Registers a client authorized for `authorization_code` +
         /// `refresh_token` with `offline_access` allowed, and stores one
         /// ready-to-redeem PKCE-protected authorization code for it. Every
@@ -6673,6 +7043,10 @@ mod client_auth_tests;
 
 #[cfg(test)]
 mod log_level_policy_tests;
+
+#[cfg(test)]
+#[allow(deprecated)] // `require_pkce` (authkestra#273) — these fixtures don't exercise it
+mod audience_tests;
 
 impl TokenResponse {
     /// Creates a new TokenResponse.

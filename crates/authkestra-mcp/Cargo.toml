@@ -34,7 +34,7 @@ authkestra-engine = { workspace = true, features = ["memory"] }
 
 [features]
 default = ["rustls-aws-lc-rs"]
-policy = ["dep:authkestra-policy"]
+policy = ["dep:authkestra-policy", "authkestra-resource/policy"]
 
 # TLS backend forwarded to authkestra-engine
 rustls-aws-lc-rs = ["authkestra-engine/rustls-aws-lc-rs"]

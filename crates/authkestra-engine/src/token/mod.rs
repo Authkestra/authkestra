@@ -199,6 +199,7 @@ pub struct Claims {
     pub aud: Option<Audience>,
     pub exp: usize,
     pub iat: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nbf: Option<usize>,
     pub jti: Option<String>,
 
@@ -408,6 +409,12 @@ impl TokenManager {
         self
     }
 
+    /// The issuer this manager stamps on the tokens it issues and requires on the tokens it
+    /// validates, when one is configured.
+    pub fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
     /// Issues a token for a user identity.
     pub fn issue_user_token(
         &self,
@@ -417,6 +424,59 @@ impl TokenManager {
         aud: Option<String>,
     ) -> Result<String, AuthError> {
         self.issue_user_token_with_extra(identity, expires_in_secs, scope, aud, HashMap::new())
+    }
+
+    /// Issues an RFC 9068 access token from `issuer` for a client and its configured audiences.
+    ///
+    /// The issuer is passed in rather than read from the manager because RFC 9068 requires `iss`
+    /// on every access token, while a manager may have been built without one: the caller (an
+    /// OpenID Provider) always knows its own.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_access_token(
+        &self,
+        issuer: &str,
+        identity: Identity,
+        client_id: &str,
+        audience: Audience,
+        expires_in_secs: u64,
+        scope: Option<String>,
+        mut extra: HashMap<String, serde_json::Value>,
+    ) -> Result<String, AuthError> {
+        let audience_count = match &audience {
+            Audience::Single(_) => 1,
+            Audience::Multiple(audiences) => audiences.len(),
+        };
+        tracing::debug!(
+            audience_count,
+            has_key_id = self.kid.is_some(),
+            "Issuing RFC 9068 access token"
+        );
+        let now = chrono::Utc::now().timestamp() as usize;
+        let expiration = now + expires_in_secs as usize;
+        let jti = take_jti(&mut extra);
+        extra.insert("client_id".to_string(), client_id.into());
+        reject_named_claim_collisions(&extra)?;
+
+        let claims = Claims {
+            iss: Some(issuer.to_string()),
+            sub: identity.external_id.clone(),
+            aud: Some(audience),
+            exp: expiration,
+            iat: now,
+            nbf: Some(now),
+            jti: Some(jti),
+            scope,
+            identity: Some(identity),
+            extra,
+        };
+
+        let mut header = Header::new(self.alg);
+        header.typ = Some("at+jwt".to_string());
+        if let Some(ref kid) = self.kid {
+            header.kid = Some(kid.clone());
+        }
+
+        encode(&header, &claims, &self.encoding_key).map_err(|e| AuthError::Token(e.to_string()))
     }
 
     /// Issues a token for a user identity, stamping the given `extra` claims
@@ -669,6 +729,12 @@ impl TokenManager {
     /// from `jsonwebtoken` until #350; it is set explicitly here now, so the
     /// window this crate honours no longer depends on a transitive
     /// dependency's default.
+    ///
+    /// # Required claims
+    ///
+    /// When `expected_aud` is `Some`, the token must contain an `aud` claim.
+    /// When the manager has an issuer, the token must contain an `iss` claim.
+    /// A token that lacks either required claim is rejected with [`AuthError::Token`].
     pub fn validate_token(
         &self,
         token: &str,
@@ -676,17 +742,27 @@ impl TokenManager {
     ) -> Result<Claims, AuthError> {
         let mut validation = Validation::new(self.alg);
         validation.leeway = self.leeway;
+        validation.validate_nbf = true;
         if let Some(aud) = expected_aud {
             validation.set_audience(&[aud]);
+            validation.required_spec_claims.insert("aud".to_string());
         } else {
             validation.validate_aud = false;
         }
         if let Some(ref iss) = self.issuer {
             validation.set_issuer(&[iss]);
+            validation.required_spec_claims.insert("iss".to_string());
         }
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
             .map_err(|e| AuthError::Token(e.to_string()))?;
+
+        if expected_aud.is_some() && token_data.claims.aud.is_none() {
+            return Err(AuthError::Token("Missing required aud claim".to_string()));
+        }
+        if self.issuer.is_some() && token_data.claims.iss.is_none() {
+            return Err(AuthError::Token("Missing required iss claim".to_string()));
+        }
 
         Ok(token_data.claims)
     }
@@ -796,6 +872,63 @@ MC4CAQAwBQYDK2VwBCIEIPlsnSfvh53rJ+Tlbo8e7cgq2mIkWQ1NCM5paVeinUh8
         assert_eq!(claims.sub, "user123");
         assert!(claims.jti.is_some());
         assert!(claims.nbf.is_some());
+    }
+
+    #[test]
+    fn access_tokens_include_client_audience_claim_and_type() {
+        let manager = TokenManager::new(b"secret", Some("issuer".to_string()));
+        let identity = test_identity();
+        let token = manager
+            .issue_access_token(
+                "issuer",
+                identity.clone(),
+                "app-client",
+                Audience::Multiple(vec!["api-a".into(), "api-b".into()]),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+
+        let header = jsonwebtoken::decode_header(&token).unwrap();
+        let claims = manager.validate_token(&token, Some("api-b")).unwrap();
+        assert_eq!(header.typ.as_deref(), Some("at+jwt"));
+        assert_eq!(claims.sub, identity.external_id);
+        let embedded_identity = claims
+            .identity
+            .expect("issued access token includes identity");
+        assert_eq!(embedded_identity.provider_id, identity.provider_id);
+        assert_eq!(embedded_identity.external_id, identity.external_id);
+        assert_eq!(embedded_identity.username, identity.username);
+        assert_eq!(embedded_identity.email, identity.email);
+        assert_eq!(embedded_identity.attributes, identity.attributes);
+        assert_eq!(
+            claims.aud,
+            Some(Audience::Multiple(vec!["api-a".into(), "api-b".into()]))
+        );
+        assert_eq!(
+            claims.extra.get("client_id"),
+            Some(&serde_json::json!("app-client"))
+        );
+    }
+
+    #[test]
+    fn access_tokens_carry_the_given_issuer_without_one_on_the_manager() {
+        let manager = TokenManager::new(b"secret", None);
+        let token = manager
+            .issue_access_token(
+                "https://op.example",
+                test_identity(),
+                "app-client",
+                Audience::Single("api".into()),
+                3600,
+                None,
+                HashMap::new(),
+            )
+            .expect("an access token without a manager issuer");
+
+        let claims = manager.validate_token(&token, Some("api")).unwrap();
+        assert_eq!(claims.iss.as_deref(), Some("https://op.example"));
     }
 
     #[test]
@@ -1935,5 +2068,73 @@ mod leeway_tests {
     fn the_configured_value_is_readable_back() {
         assert_eq!(manager().leeway(), DEFAULT_LEEWAY_SECS);
         assert_eq!(manager().with_leeway(5).leeway(), 5);
+    }
+
+    #[test]
+    fn validate_token_enforces_not_before_claim() {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = Claims {
+            iss: Some("https://op.example".to_string()),
+            sub: "user-1".to_string(),
+            aud: Some(Audience::Single("api".to_string())),
+            exp: now + 3600,
+            iat: now,
+            nbf: Some(now + 300),
+            jti: None,
+            scope: None,
+            identity: None,
+            extra: HashMap::new(),
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .expect("signing should succeed");
+
+        let err = TokenManager::new(SECRET, Some("https://op.example".to_string()))
+            .with_leeway(0)
+            .validate_token(&token, Some("api"))
+            .expect_err("future nbf must be rejected");
+        assert!(
+            err.to_string().contains("ImmatureSignature"),
+            "expected ImmatureSignature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_token_rejects_missing_or_null_aud_and_iss_when_configured() {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let manager = TokenManager::new(SECRET, Some("https://op.example".to_string()));
+
+        // Missing `aud` when `expected_aud` is provided
+        let no_aud_payload = serde_json::json!({
+            "iss": "https://op.example",
+            "sub": "user-1",
+            "exp": now + 3600,
+            "iat": now,
+        });
+        let no_aud_token = encode(
+            &Header::new(Algorithm::HS256),
+            &no_aud_payload,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        assert!(manager.validate_token(&no_aud_token, Some("api")).is_err());
+
+        // Missing `iss` when `manager.issuer` is configured
+        let no_iss_payload = serde_json::json!({
+            "sub": "user-1",
+            "aud": "api",
+            "exp": now + 3600,
+            "iat": now,
+        });
+        let no_iss_token = encode(
+            &Header::new(Algorithm::HS256),
+            &no_iss_payload,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        assert!(manager.validate_token(&no_iss_token, Some("api")).is_err());
     }
 }

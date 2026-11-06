@@ -4,6 +4,7 @@ use authkestra_crypto_util::{decrypt_aes_256_gcm, encrypt_aes_256_gcm};
 use authkestra_engine::auth::state::Identity;
 use authkestra_engine::store::KvStore;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +16,14 @@ use std::time::Duration;
 pub struct EncryptedKvTokenVault {
     store: Arc<dyn KvStore<Vec<u8>>>,
     encryption_key: [u8; 32],
+}
+
+#[derive(Serialize, Deserialize)]
+struct VaultRecord {
+    provider_id: String,
+    external_id: String,
+    service: String,
+    token: DownstreamToken,
 }
 
 impl EncryptedKvTokenVault {
@@ -29,8 +38,13 @@ impl EncryptedKvTokenVault {
     /// Derives the isolated storage key for an identity and service.
     pub fn storage_key(identity: &Identity, service: &str) -> String {
         format!(
-            "mcp:vault:{}:{}:{}",
-            identity.provider_id, identity.external_id, service
+            "mcp:vault-v2:{}:{}{}:{}{}:{}",
+            identity.provider_id.len(),
+            identity.provider_id,
+            identity.external_id.len(),
+            identity.external_id,
+            service.len(),
+            service
         )
     }
 }
@@ -52,8 +66,14 @@ impl DownstreamTokenBroker for EncryptedKvTokenVault {
             "encrypting downstream token with AES-256-GCM for storage at rest"
         );
 
+        let record = VaultRecord {
+            provider_id: identity.provider_id.clone(),
+            external_id: identity.external_id.clone(),
+            service: service.to_string(),
+            token: token.clone(),
+        };
         let raw_json =
-            serde_json::to_vec(token).map_err(|e| BrokerError::Serialization(e.to_string()))?;
+            serde_json::to_vec(&record).map_err(|e| BrokerError::Serialization(e.to_string()))?;
         let encrypted_bytes = encrypt_aes_256_gcm(&raw_json, &self.encryption_key)?;
 
         let key = Self::storage_key(identity, service);
@@ -94,8 +114,17 @@ impl DownstreamTokenBroker for EncryptedKvTokenVault {
         };
 
         let decrypted_bytes = decrypt_aes_256_gcm(&encrypted_bytes, &self.encryption_key)?;
-        let token: DownstreamToken = serde_json::from_slice(&decrypted_bytes)
+        let record: VaultRecord = serde_json::from_slice(&decrypted_bytes)
             .map_err(|e| BrokerError::Serialization(e.to_string()))?;
+
+        if record.provider_id != identity.provider_id
+            || record.external_id != identity.external_id
+            || record.service != service
+        {
+            tracing::warn!(service = %service, "downstream token record binding mismatch");
+            return Err(BrokerError::RecordMismatch);
+        }
+        let token = record.token;
 
         if let Some(exp) = token.expires_at {
             if Utc::now().timestamp() > exp {

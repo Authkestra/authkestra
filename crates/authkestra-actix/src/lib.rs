@@ -172,7 +172,7 @@ impl FromRequest for AuthSession {
                     actix_web::error::ErrorUnauthorized("Invalid session")
                 })?;
 
-            tracing::info!(session_id = %session.id, user_id = %session.identity.external_id, "successfully extracted actix AuthSession");
+            tracing::info!(user_id = %session.identity.external_id, "successfully extracted actix AuthSession");
             Ok(AuthSession(session))
         })
     }

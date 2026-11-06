@@ -90,20 +90,33 @@ pub async fn verify_at(
     match &outcome {
         Ok(identity) => tracing::debug!(
             target: "authkestra_devsig",
-            subject = %identity.subject,
-            device = %identity.device,
-            method = %request.method,
-            path = %request.path,
+            subject = ?identity.subject,
+            device = ?identity.device,
+            method = ?request.method,
+            path = ?request.path,
             "device-signature request accepted"
         ),
-        Err(error) => tracing::warn!(
-            target: "authkestra_devsig",
-            reason = error.code(),
-            %error,
-            method = %request.method,
-            path = %request.path,
-            "device-signature request rejected"
-        ),
+        Err(error) => {
+            let sanitized_error: String = error
+                .to_string()
+                .chars()
+                .flat_map(|c| {
+                    if c.is_control() {
+                        c.escape_default().collect::<Vec<_>>()
+                    } else {
+                        vec![c]
+                    }
+                })
+                .collect();
+            tracing::warn!(
+                target: "authkestra_devsig",
+                reason = error.code(),
+                error = ?sanitized_error,
+                method = ?request.method,
+                path = ?request.path,
+                "device-signature request rejected"
+            );
+        }
     }
 
     outcome
@@ -150,10 +163,22 @@ async fn verify_inner(
 
     // --- Step 8: REPLAY — fails closed: a store error rejects exactly like a genuine replay,
     // never falls back to "allow". ---
-    // The marker must outlive the last instant the signature can still be accepted:
-    // freshness allows `now <= exp + skew`, so it lives until one second past that.
-    let skew = config.max_clock_skew.as_secs() as i64;
-    let ttl = Duration::from_secs((sig.exp + skew - now + 1).max(1) as u64);
+    // Retain replay markers across the entire freshness acceptance interval, including configured
+    // clock skew and inclusive whole-second timestamp granularity, preventing replay at the boundary.
+    let clock_skew_secs = config.max_clock_skew.as_secs() as i64;
+    let ttl_secs = sig
+        .exp
+        .saturating_add(clock_skew_secs)
+        .saturating_add(1)
+        .saturating_sub(now)
+        .max(1) as u64;
+    let ttl = Duration::from_secs(ttl_secs);
+    tracing::debug!(
+        target: "authkestra_devsig",
+        jti = %sig.jti,
+        ttl_secs = ttl_secs,
+        "registering replay marker with skew-inclusive TTL"
+    );
     match replay_store.put_if_absent(&sig.jti, ttl).await {
         Ok(true) => {}
         // These two keep their own events despite the boundary above, because
@@ -164,7 +189,7 @@ async fn verify_inner(
         // different kinds of event: one is a client being refused, the other
         // is this service degrading.
         Ok(false) => {
-            tracing::warn!(target: "authkestra_devsig", jti = %sig.jti, "jti already seen");
+            tracing::warn!(target: "authkestra_devsig", jti = ?sig.jti, "jti already seen");
             return Err(VerifyError::ReplayDetected);
         }
         Err(store_err) => {

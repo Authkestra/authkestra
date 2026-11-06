@@ -216,15 +216,46 @@ pub fn verify_bound_and_signed(
     if claims.aud != config.audience {
         return Err(VerifyError::AudienceMismatch);
     }
-    // Profile v1: each hash is present **exactly** when the request has a query (body), so a
-    // hash on one side only is a mismatch. A stray `bdh` on a body-less request is not harmless:
-    // it means the body the device signed is not the one that arrived — it was stripped in
-    // transit — and accepting it would let a signed write be replayed as an empty one.
-    if !hash_matches(request.query.map(str::as_bytes), claims.qsh.as_deref()) {
-        return Err(VerifyError::QueryMismatch);
+    if request.query.is_some() || claims.qsh.is_some() {
+        match (request.query, &claims.qsh) {
+            (Some(query), Some(qsh)) => {
+                let computed = hex_sha256(query.as_bytes());
+                if !constant_time_eq(qsh, &computed) {
+                    tracing::warn!(target: "authkestra_devsig", "query string hash mismatch");
+                    return Err(VerifyError::QueryMismatch);
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    target: "authkestra_devsig",
+                    request_has_query = request.query.is_some(),
+                    claims_has_qsh = claims.qsh.is_some(),
+                    "query hash stripping or unexpected query parameter detected"
+                );
+                return Err(VerifyError::QueryMismatch);
+            }
+        }
     }
-    if !hash_matches(request.body, claims.bdh.as_deref()) {
-        return Err(VerifyError::BodyMismatch);
+
+    if request.body.is_some() || claims.bdh.is_some() {
+        match (request.body, &claims.bdh) {
+            (Some(body), Some(bdh)) => {
+                let computed = hex_sha256(body);
+                if !constant_time_eq(bdh, &computed) {
+                    tracing::warn!(target: "authkestra_devsig", "body digest hash mismatch");
+                    return Err(VerifyError::BodyMismatch);
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    target: "authkestra_devsig",
+                    request_has_body = request.body.is_some(),
+                    claims_has_bdh = claims.bdh.is_some(),
+                    "body digest stripping or unexpected body detected"
+                );
+                return Err(VerifyError::BodyMismatch);
+            }
+        }
     }
 
     Ok(VerifiedSignature {
@@ -247,15 +278,6 @@ fn curve_is_consistent(algorithm: &AlgorithmParameters) -> bool {
     }
 }
 
-/// Whether a `qsh`/`bdh` claim agrees with the request: both absent, or both present with the
-/// claim equal (constant-time) to the lower-case hex SHA-256 of the raw bytes.
-fn hash_matches(request: Option<&[u8]>, claim: Option<&str>) -> bool {
-    match (request, claim) {
-        (None, None) => true,
-        (Some(bytes), Some(claim)) => constant_time_eq(claim, &hex_sha256(bytes)),
-        _ => false,
-    }
-}
 
 fn hex_sha256(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
