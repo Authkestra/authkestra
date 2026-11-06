@@ -77,6 +77,8 @@ macro_rules! impl_credential_store {
         $update_query:expr,
         $delete_credential_query:expr,
         $delete_credentials_query:expr,
+        $claim_totp_step_query:expr,
+        $claim_rebind_step:expr,
         $migrate_q1:expr,
         $migrate_q2:expr
     ) => {
@@ -109,6 +111,9 @@ macro_rules! impl_credential_store {
                     } else if let Some(s) = data.get("secret").and_then(|v| v.as_str()) {
                         secret_key = Some(s.to_string());
                     }
+                    if data.is_object() {
+                        extra_data = Some(serde_json::to_string(&data).unwrap_or_default());
+                    }
                 } else if cred_type == "password" {
                     if let Some(s) = data.as_str() {
                         secret_key = Some(s.to_string());
@@ -117,7 +122,7 @@ macro_rules! impl_credential_store {
                     extra_data = Some(serde_json::to_string(&data).unwrap_or_default());
                 }
 
-                sqlx::query(&query)
+                let result = sqlx::query(&query)
                     .bind(&credential_id)
                     .bind(user_id)
                     .bind(cred_type)
@@ -129,6 +134,18 @@ macro_rules! impl_credential_store {
                         tracing::error!(error = %e, concat!($dialect_name, " save_credential error"));
                         AuthError::Internal(format!("{} save_credential error: {}", $dialect_name, e))
                     })?;
+
+                if result.rows_affected() == 0 {
+                    tracing::error!(
+                        credential_id = %credential_id,
+                        user_id = %user_id,
+                        cred_type = %cred_type,
+                        "credential_id conflict: credential belongs to another user or credential type"
+                    );
+                    return Err(AuthError::Credentials(
+                        "Credential ID collision or ownership mismatch".into(),
+                    ));
+                }
 
                 Ok(())
             }
@@ -253,6 +270,40 @@ macro_rules! impl_credential_store {
 
                 Ok(result.rows_affected())
             }
+
+            #[tracing::instrument(skip(self))]
+            async fn claim_totp_step(
+                &self,
+                user_id: &str,
+                credential_id: &str,
+                matched_step: u64,
+            ) -> Result<bool, AuthError> {
+                tracing::debug!(
+                    user_id = %user_id,
+                    credential_id = %credential_id,
+                    matched_step = matched_step,
+                    concat!("claiming TOTP step in ", $dialect_name, " store")
+                );
+                let query = format!($claim_totp_step_query, self.table_name);
+
+                let mut q = sqlx::query(&query)
+                    .bind(matched_step as i64)
+                    .bind(credential_id)
+                    .bind(user_id);
+                if $claim_rebind_step {
+                    // MySQL uses positional placeholders, so matched_step is bound again for `< ?`.
+                    q = q.bind(matched_step as i64);
+                }
+                let result = q
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(error = %e, concat!($dialect_name, " claim_totp_step error"));
+                        AuthError::Internal(format!("{} claim_totp_step error: {}", $dialect_name, e))
+                    })?;
+
+                Ok(result.rows_affected() > 0)
+            }
         }
 
         #[cfg(feature = $feature)]
@@ -279,11 +330,13 @@ impl_credential_store! {
     sqlx::Postgres,
     "sql-postgres",
     "Postgres",
-    "INSERT INTO {} (credential_id, user_id, cred_type, secret_key, extra_data) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(credential_id) DO UPDATE SET secret_key = $4, extra_data = $5",
+    "INSERT INTO {0} (credential_id, user_id, cred_type, secret_key, extra_data) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(credential_id) DO UPDATE SET secret_key = EXCLUDED.secret_key, extra_data = EXCLUDED.extra_data WHERE {0}.user_id = EXCLUDED.user_id AND {0}.cred_type = EXCLUDED.cred_type",
     "SELECT credential_id, user_id, cred_type, secret_key, extra_data FROM {} WHERE user_id = $1 AND cred_type = $2 ORDER BY created_at DESC",
     "UPDATE {} SET extra_data = $1 WHERE credential_id = $2",
     "DELETE FROM {} WHERE credential_id = $1 AND user_id = $2 AND cred_type = $3",
     "DELETE FROM {} WHERE user_id = $1 AND cred_type = $2",
+    "UPDATE {0} SET extra_data = (coalesce(nullif(extra_data, ''), '{{}}')::jsonb || jsonb_build_object('last_used_step', $1::bigint))::text WHERE credential_id = $2 AND user_id = $3 AND cred_type = 'totp' AND (extra_data IS NULL OR (coalesce(nullif(extra_data, ''), '{{}}')::jsonb->>'last_used_step') IS NULL OR ((coalesce(nullif(extra_data, ''), '{{}}')::jsonb->>'last_used_step')::bigint < $1))",
+    false,
     "CREATE TABLE IF NOT EXISTS {table} (credential_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, cred_type TEXT NOT NULL, secret_key TEXT, extra_data TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX IF NOT EXISTS {table}_user_idx ON {table}(user_id, cred_type)"
 }
@@ -292,11 +345,13 @@ impl_credential_store! {
     sqlx::Sqlite,
     "sql-sqlite",
     "Sqlite",
-    "INSERT INTO {} (credential_id, user_id, cred_type, secret_key, extra_data) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(credential_id) DO UPDATE SET secret_key = ?4, extra_data = ?5",
+    "INSERT INTO {0} (credential_id, user_id, cred_type, secret_key, extra_data) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(credential_id) DO UPDATE SET secret_key = excluded.secret_key, extra_data = excluded.extra_data WHERE {0}.user_id = excluded.user_id AND {0}.cred_type = excluded.cred_type",
     "SELECT credential_id, user_id, cred_type, secret_key, extra_data FROM {} WHERE user_id = ?1 AND cred_type = ?2 ORDER BY created_at DESC",
     "UPDATE {} SET extra_data = ?1 WHERE credential_id = ?2",
     "DELETE FROM {} WHERE credential_id = ?1 AND user_id = ?2 AND cred_type = ?3",
     "DELETE FROM {} WHERE user_id = ?1 AND cred_type = ?2",
+    "UPDATE {} SET extra_data = json_set(coalesce(extra_data, '{{}}'), '$.last_used_step', ?1) WHERE credential_id = ?2 AND user_id = ?3 AND cred_type = 'totp' AND (extra_data IS NULL OR json_extract(extra_data, '$.last_used_step') IS NULL OR json_extract(extra_data, '$.last_used_step') < ?1)",
+    false,
     "CREATE TABLE IF NOT EXISTS {table} (credential_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, cred_type TEXT NOT NULL, secret_key TEXT, extra_data TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX IF NOT EXISTS {table}_user_idx ON {table}(user_id, cred_type)"
 }
@@ -305,11 +360,13 @@ impl_credential_store! {
     sqlx::MySql,
     "sql-mysql",
     "MySql",
-    "INSERT INTO {} (credential_id, user_id, cred_type, secret_key, extra_data) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE secret_key = VALUES(secret_key), extra_data = VALUES(extra_data)",
+    "INSERT INTO {} (credential_id, user_id, cred_type, secret_key, extra_data) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE secret_key = IF(user_id = VALUES(user_id) AND cred_type = VALUES(cred_type), VALUES(secret_key), secret_key), extra_data = IF(user_id = VALUES(user_id) AND cred_type = VALUES(cred_type), VALUES(extra_data), extra_data), credential_id = IF(user_id = VALUES(user_id) AND cred_type = VALUES(cred_type), credential_id, NULL)",
     "SELECT credential_id, user_id, cred_type, secret_key, extra_data FROM {} WHERE user_id = ? AND cred_type = ? ORDER BY created_at DESC",
     "UPDATE {} SET extra_data = ? WHERE credential_id = ?",
     "DELETE FROM {} WHERE credential_id = ? AND user_id = ? AND cred_type = ?",
     "DELETE FROM {} WHERE user_id = ? AND cred_type = ?",
+    "UPDATE {} SET extra_data = JSON_SET(COALESCE(NULLIF(extra_data, ''), '{{}}'), '$.last_used_step', ?) WHERE credential_id = ? AND user_id = ? AND cred_type = 'totp' AND (extra_data IS NULL OR extra_data = '' OR JSON_EXTRACT(extra_data, '$.last_used_step') IS NULL OR JSON_EXTRACT(extra_data, '$.last_used_step') < ?)",
+    true,
     "CREATE TABLE IF NOT EXISTS {table} (credential_id VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255) NOT NULL, cred_type VARCHAR(255) NOT NULL, secret_key TEXT, extra_data TEXT, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX {table}_user_idx ON {table}(user_id, cred_type)"
 }
@@ -363,13 +420,106 @@ mod tests {
         assert_eq!(passkeys.len(), 1);
         assert_eq!(passkeys[0]["id"].as_str().unwrap(), "passkey1");
 
-        // 4. Update Webauthn
-        let _new_data = json!({"id": "passkey1", "foo": "baz"});
-        // Need the credential_id to update (it generates UUID for password/totp if not set, but Webauthn usually passes it, wait... no, save_credential extracts `credential_id` from data if present. Let's see.)
-        // wait, we don't know the generated ID for webauthn unless it's in the payload?
-        // Actually `save_credential` creates a UUID if not provided in `credential_id` field.
-        // I will just use `remove_credential` to test. Oh wait, `remove_credential` is in `CredentialStore` trait!
-        // Let's implement it for SQLite: Wait, did I forget `remove_credential` implementation?
-        // Let's check!
+        // 4. Delete Webauthn
+        let deleted = store
+            .delete_credential("user3", "webauthn", "passkey1")
+            .await
+            .unwrap();
+        assert!(deleted);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_claim_totp_step_and_collision_rejection() {
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let store = SqlxCredentialStore::new(pool);
+        store.migrate().await.unwrap();
+
+        // Save a TOTP credential with explicit ID
+        store
+            .save_credential(
+                "alice",
+                "totp",
+                json!({"credential_id": "alice_totp", "secret": "JBSWY3DPEHPK3PXP"}),
+            )
+            .await
+            .unwrap();
+
+        // 1. claim_totp_step should succeed for first attempt
+        let claimed = store
+            .claim_totp_step("alice", "alice_totp", 100)
+            .await
+            .unwrap();
+        assert!(claimed, "initial step claim should succeed");
+
+        // 2. Replaying the exact same step should return false
+        let replay = store
+            .claim_totp_step("alice", "alice_totp", 100)
+            .await
+            .unwrap();
+        assert!(!replay, "replaying step 100 must return false");
+
+        // 3. An older step should return false
+        let older = store
+            .claim_totp_step("alice", "alice_totp", 99)
+            .await
+            .unwrap();
+        assert!(!older, "older step 99 must return false");
+
+        // 4. A newer step should succeed
+        let newer = store
+            .claim_totp_step("alice", "alice_totp", 101)
+            .await
+            .unwrap();
+        assert!(newer, "newer step 101 must succeed");
+
+        // 5. Wrong user should return false
+        let wrong_user = store
+            .claim_totp_step("bob", "alice_totp", 102)
+            .await
+            .unwrap();
+        assert!(
+            !wrong_user,
+            "claiming step for wrong user must return false"
+        );
+
+        // 6. Cross-user collision: bob tries to hijack or overwrite alice's credential_id
+        let collision_result = store
+            .save_credential(
+                "bob",
+                "totp",
+                json!({"credential_id": "alice_totp", "secret": "ATTACKER_SECRET"}),
+            )
+            .await;
+        assert!(
+            collision_result.is_err(),
+            "saving credential with existing credential_id under another user must be rejected"
+        );
+
+        // 7. Legitimate update by alice under alice_totp succeeds
+        let update_result = store
+            .save_credential(
+                "alice",
+                "totp",
+                json!({"credential_id": "alice_totp", "secret": "NEW_SECRET"}),
+            )
+            .await;
+        assert!(
+            update_result.is_ok(),
+            "legitimate owner update must succeed"
+        );
+    }
+
+    /// Verifies that the MySQL `claim_totp_step` SQL template contains 4 positional `?`
+    /// placeholders matching the 4 bound arguments (`matched_step`, `credential_id`, `user_id`, `matched_step`).
+    #[test]
+    fn test_mysql_claim_totp_step_placeholder_count() {
+        let mysql_query = format!(
+            "UPDATE {} SET extra_data = JSON_SET(COALESCE(NULLIF(extra_data, ''), '{{}}'), '$.last_used_step', ?) WHERE credential_id = ? AND user_id = ? AND cred_type = 'totp' AND (extra_data IS NULL OR extra_data = '' OR JSON_EXTRACT(extra_data, '$.last_used_step') IS NULL OR JSON_EXTRACT(extra_data, '$.last_used_step') < ?)",
+            "authkestra_credentials"
+        );
+        assert_eq!(mysql_query.matches('?').count(), 4);
     }
 }

@@ -117,7 +117,21 @@ impl<P: OAuthProvider, M: UserMapper> OAuth2Flow<P, M> {
         self
     }
 
+    /// Whether PKCE is enabled for this OAuth2 flow.
+    pub fn pkce_enabled(&self) -> bool {
+        self.use_pkce
+    }
+
     /// Generates the redirect URL and CSRF state.
+    ///
+    /// # PKCE Contract
+    ///
+    /// When PKCE is enabled (`self.pkce_enabled()`):
+    /// - If `pkce_challenge` is `None`, a fresh PKCE challenge is sent to the provider and
+    ///   the matching `code_verifier` is stored in the returned [`OAuth2State`].
+    /// - If `pkce_challenge` is `Some`, the supplied challenge is sent to the provider and
+    ///   `OAuth2State.code_verifier` is returned as `None`; the caller must populate
+    ///   `OAuth2State.code_verifier` with the matching verifier before calling [`Self::finalize_login`].
     #[tracing::instrument(skip(self), fields(provider_id = %self.provider.provider_id()))]
     pub fn initiate_login(
         &self,
@@ -142,19 +156,46 @@ impl<P: OAuthProvider, M: UserMapper> OAuth2Flow<P, M> {
                 .collect::<Vec<&str>>()
         };
 
+        let (effective_pkce_challenge, code_verifier) = if self.use_pkce {
+            match pkce_challenge {
+                Some(challenge) => {
+                    tracing::debug!(
+                        pkce_mode = "caller_supplied",
+                        "using caller-supplied PKCE challenge"
+                    );
+                    (Some(challenge.to_string()), None)
+                }
+                None => {
+                    tracing::debug!(
+                        pkce_mode = "auto_generated",
+                        "automatically generated PKCE challenge and verifier"
+                    );
+                    let pkce = crate::auth::pkce::Pkce::new();
+                    (Some(pkce.code_challenge), Some(pkce.code_verifier))
+                }
+            }
+        } else {
+            tracing::debug!(
+                pkce_mode = "disabled",
+                has_supplied_challenge = pkce_challenge.is_some(),
+                "PKCE disabled on flow"
+            );
+            (pkce_challenge.map(|s| s.to_string()), None)
+        };
+
         tracing::debug!(scopes = ?effective_scopes, "generating authorization URL");
 
         let url = self.provider.get_authorization_url(
             &state,
             effective_scopes,
-            pkce_challenge,
+            effective_pkce_challenge.as_deref(),
             nonce.as_deref(),
         );
 
         let auth_state = OAuth2State {
             state: state.clone(),
             nonce,
-            code_verifier: None, // Will be set by the caller if needed before encryption
+            code_verifier,
             success_url: None,
             provider_id: self.provider.provider_id().to_string(),
             expires_at: chrono::Utc::now().timestamp() + 600,
@@ -176,6 +217,14 @@ impl<P: OAuthProvider, M: UserMapper> OAuth2Flow<P, M> {
         if received_state != expected_state.state {
             tracing::error!("CSRF mismatch: received state does not match expected state");
             return Err(AuthError::CsrfMismatch);
+        }
+
+        if self.use_pkce && expected_state.code_verifier.is_none() {
+            tracing::error!(
+                provider_id = %self.provider.provider_id(),
+                "PKCE is enabled, but code_verifier was omitted from the expected state"
+            );
+            return Err(AuthError::InvalidInput);
         }
 
         tracing::debug!("exchanging code for identity");
@@ -350,7 +399,7 @@ mod tests {
         let expected_state = OAuth2State {
             state: "state123".to_string(),
             nonce: None,
-            code_verifier: None,
+            code_verifier: Some("verifier123".to_string()),
             success_url: None,
             provider_id: "mock".to_string(),
             expires_at: 0,
@@ -550,5 +599,42 @@ mod tests {
             "a correctly echoed nonce should pass; got {:?}",
             result.err()
         );
+    }
+
+    /// Verifies that `OAuth2Flow::initiate_login` automatically generates a PKCE
+    /// verifier and challenge when PKCE is enabled and none is supplied by the caller.
+    #[tokio::test]
+    async fn test_pkce_auto_generation_when_none_provided() {
+        let flow = OAuth2Flow::new(mock("plain"));
+        assert!(flow.pkce_enabled());
+        let (_url, state) = flow.initiate_login(&["email"], None);
+        assert!(state.code_verifier.is_some());
+        assert!(!state.code_verifier.as_ref().unwrap().is_empty());
+    }
+
+    /// Verifies that `OAuth2Flow::finalize_login` rejects state missing a PKCE verifier
+    /// when PKCE is enabled, and permits it when PKCE is explicitly disabled.
+    #[tokio::test]
+    async fn test_pkce_rejected_in_finalize_when_verifier_missing() {
+        let flow = OAuth2Flow::new(mock("plain"));
+        let state = OAuth2State {
+            state: "s1".to_string(),
+            nonce: None,
+            code_verifier: None,
+            success_url: None,
+            provider_id: "plain".to_string(),
+            expires_at: 0,
+        };
+        let err = flow
+            .finalize_login("code123", "s1", &state)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::InvalidInput));
+
+        // When PKCE disabled, missing verifier is allowed
+        let flow_no_pkce = OAuth2Flow::new(mock("plain")).with_pkce(false);
+        assert!(!flow_no_pkce.pkce_enabled());
+        let ok = flow_no_pkce.finalize_login("code123", "s1", &state).await;
+        assert!(ok.is_ok());
     }
 }
