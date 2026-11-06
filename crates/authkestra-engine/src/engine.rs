@@ -531,7 +531,7 @@ impl<T> Engine<Configured<Arc<dyn SessionStore>>, T> {
             expires_at: chrono::Utc::now() + session_duration,
         };
 
-        tracing::debug!(session_id = %session.id, "creating new session");
+        tracing::debug!("creating new session");
 
         self.session_store
             .0
@@ -542,7 +542,7 @@ impl<T> Engine<Configured<Arc<dyn SessionStore>>, T> {
                 AuthError::Session(e.to_string())
             })?;
 
-        tracing::info!(session_id = %session.id, "session created successfully");
+        tracing::info!("session created successfully");
         Ok(session)
     }
 }

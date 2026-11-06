@@ -407,6 +407,42 @@ async fn the_strategy_validates_not_before_with_configured_leeway() {
 }
 
 #[tokio::test]
+async fn configured_audience_rejects_tokens_without_aud_claim() {
+    let key = generate_rsa_key(Some("kid-1"));
+    let server = start_jwks_server(vec![key.jwk.clone()]).await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    for claims in [
+        serde_json::json!({"sub": "user-1", "iss": "issuer", "exp": now + 3600}),
+        serde_json::json!({"sub": "user-1", "iss": "issuer", "exp": now + 3600, "aud": null}),
+    ] {
+        let token = sign_token(&key.encoding_key, Some("kid-1"), &claims);
+        let config = ValidationConfig::builder()
+            .jwks_url(jwks_url(&server))
+            .issuer("issuer")
+            .audience("my-api")
+            .build();
+        let strategy: JwtStrategy<TestClaims> = JwtStrategy::new(config);
+        let request = Request::builder()
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .body(())
+            .unwrap();
+        let (parts, _) = request.into_parts();
+        let result = strategy
+            .authenticate(&parts)
+            .await
+            .expect("authentication must not error");
+        assert!(
+            result.is_none(),
+            "token with missing/null aud should be rejected when audience is configured"
+        );
+    }
+}
+
+#[tokio::test]
 async fn missing_kid_falls_back_to_first_key_by_default() {
     let key1 = generate_rsa_key(Some("k1"));
     let key2 = generate_rsa_key(Some("k2"));

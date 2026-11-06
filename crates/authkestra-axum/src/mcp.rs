@@ -30,11 +30,13 @@ pub struct ApprovalSubmissionPayload {
     pub id: Option<String>,
 }
 
-/// Extracts caller identity from request extensions, custom headers, or returns None.
+/// Extracts caller identity from verified request extensions, or opt-in unverified headers.
 fn extract_identity(
+    router: &McpRouter,
     headers: &HeaderMap,
     opt_ext_id: Option<&Identity>,
     opt_ext_arc_id: Option<&Arc<Identity>>,
+    #[cfg(feature = "session")] opt_session: Option<&crate::AuthSession>,
 ) -> Option<Identity> {
     if let Some(id) = opt_ext_id {
         tracing::debug!(
@@ -54,26 +56,43 @@ fn extract_identity(
         return Some((**id).clone());
     }
 
-    if let Some(raw_header) = headers
-        .get("x-authkestra-identity")
-        .and_then(|h| h.to_str().ok())
-    {
-        match serde_json::from_str::<Identity>(raw_header) {
-            Ok(id) => {
-                tracing::debug!(
-                    provider_id = %id.provider_id,
-                    external_id = %id.external_id,
-                    "resolved caller identity from x-authkestra-identity header"
-                );
-                return Some(id);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to parse x-authkestra-identity header");
-            }
-        }
+    #[cfg(feature = "session")]
+    if let Some(session) = opt_session {
+        let id = &session.0.identity;
+        tracing::debug!(
+            provider_id = %id.provider_id,
+            external_id = %id.external_id,
+            "resolved caller identity from Extension<AuthSession>"
+        );
+        return Some(id.clone());
     }
 
-    tracing::debug!("no caller identity found in request extensions or headers");
+    if router.allows_unverified_identity_header() {
+        if let Some(raw_header) = headers
+            .get("x-authkestra-identity")
+            .and_then(|h| h.to_str().ok())
+        {
+            match serde_json::from_str::<Identity>(raw_header) {
+                Ok(id) => {
+                    tracing::debug!(
+                        provider_id = %id.provider_id,
+                        external_id = %id.external_id,
+                        "resolved caller identity from x-authkestra-identity header (unverified mode enabled)"
+                    );
+                    return Some(id);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse x-authkestra-identity header");
+                }
+            }
+        }
+    } else if headers.contains_key("x-authkestra-identity") {
+        tracing::warn!(
+            "ignoring unverified x-authkestra-identity header because allow_unverified_identity_header is not enabled"
+        );
+    }
+
+    tracing::debug!("no caller identity found in request extensions");
     None
 }
 
@@ -83,6 +102,7 @@ pub async fn axum_mcp_handler<AppState>(
     headers: HeaderMap,
     opt_id: Option<Extension<Identity>>,
     opt_arc_id: Option<Extension<Arc<Identity>>>,
+    #[cfg(feature = "session")] opt_session: Option<Extension<crate::AuthSession>>,
     body_bytes: Bytes,
 ) -> Response
 where
@@ -100,9 +120,12 @@ where
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     let identity = extract_identity(
+        &router,
         &headers,
         opt_id.as_ref().map(|Extension(id)| id),
         opt_arc_id.as_ref().map(|Extension(id)| id),
+        #[cfg(feature = "session")]
+        opt_session.as_ref().map(|Extension(s)| s),
     );
 
     let mut rpc_req: JsonRpcRequest = match serde_json::from_slice(&body_bytes) {
@@ -257,6 +280,7 @@ pub async fn axum_approve_submit_handler<AppState>(
     headers: HeaderMap,
     opt_id: Option<Extension<Identity>>,
     opt_arc_id: Option<Extension<Arc<Identity>>>,
+    #[cfg(feature = "session")] opt_session: Option<Extension<crate::AuthSession>>,
     Json(payload): Json<ApprovalSubmissionPayload>,
 ) -> Response
 where
@@ -282,9 +306,12 @@ where
     };
 
     let identity = match extract_identity(
+        &router,
         &headers,
         opt_id.as_ref().map(|Extension(id)| id),
         opt_arc_id.as_ref().map(|Extension(id)| id),
+        #[cfg(feature = "session")]
+        opt_session.as_ref().map(|Extension(s)| s),
     ) {
         Some(id) => id,
         None => {
@@ -306,7 +333,6 @@ where
         Ok(result) => {
             tracing::info!(
                 approval_id = %approval_id,
-                execution_token = %result.execution_token,
                 "step-up challenge approved and execution token minted"
             );
             (StatusCode::OK, Json(result)).into_response()

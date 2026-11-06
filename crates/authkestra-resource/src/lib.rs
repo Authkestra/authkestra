@@ -13,7 +13,10 @@ pub use dpop::{DpopJtiRecord, DpopReplayStore, NoDpopReplayStore, DPOP_PROOF_MAX
 #[cfg(feature = "policy")]
 pub mod policy;
 #[cfg(feature = "policy")]
-pub use policy::{DefaultPrincipalMapper, PolicyGuard, PrincipalMapper};
+pub use policy::{
+    encode_principal_component, format_principal_uid_str, DefaultPrincipalMapper, PolicyGuard,
+    PrincipalMapper,
+};
 
 /// Policy for controlling the behavior of chained authentication strategies.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

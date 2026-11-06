@@ -162,7 +162,17 @@ When a `HumanApproved` tool call arrives without an execution proof token:
 2. A SHA-256 digest is computed over `(session_id, tool_name, jcs_canonical_arguments, expires_at)`.
 3. The server responds with JSON-RPC error code `-32001` (`RPC_STEP_UP_REQUIRED`) containing the challenge digest and approval URL.
 4. When the human approves, an `ApprovedExecutionRecord` is minted in `KvStore`.
-5. Upon retry with the execution token, the router re-canonicalizes the arguments and re-computes the digest. If *any* argument was changed, re-ordered keys retain the same hash, but altered values (or injected keys) produce a hash mismatch, failing immediately with `-32003` (`RPC_PARAMETER_MISMATCH`).
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:5bcb8b2f514bb413aa094a8fc5b88e0ca8abf4dc3a2a1d1a2964f8b02f894f4e -->
+
+5. On retry, the router checks the canonicalized arguments against the approved digest. Reordered object keys are accepted; changed values or injected keys fail the binding check.
+
+For `HumanApproved` calls, arguments are rejected with `RPC_INVALID_PARAMS` if JCS changes their JSON numeric value or type. For example, use strings for affected large integers; floating-point values such as `50.0` and `-0.0` also fail this check because JCS renders them as integers. The same validation applies when creating and redeeming an approval. An invalid retry consumes its execution token.
+
+Upgrading to this validation invalidates pending challenges and execution tokens created by the previous version. Request a new approval after upgrading.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ---
 
@@ -176,7 +186,14 @@ Execution tokens can only be presented once. The router calls `AtomicConsume::co
 
 To prevent autonomous agents from inspecting raw OAuth refresh tokens or master secrets in LLM prompt contexts, `authkestra-mcp` includes `EncryptedKvTokenVault`:
 - Tokens are encrypted at rest using **AES-256-GCM** (NIST SP 800-38D with 12-byte random nonces and 16-byte authentication tags) via `authkestra-crypto-util`.
-- Storage keys isolate tokens per tenant: `mcp:vault:{provider_id}:{external_id}:{service}`.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:e08e40e3bba02da1715ce1afeef8fa7cd7531b791c3d086f98da66c9a8719477 -->
+
+- Storage keys isolate tokens per identity and service using `mcp:vault-v2:` followed by each field's UTF-8 byte length, a colon, and the field. The encrypted record also binds the provider, external ID, and service.
+- Upgrading makes legacy `mcp:vault:` records unavailable: their keys are ambiguous and their contents do not identify the owner. Reconnect or store tokens again for verified identities. Retire old vault instances before relying on the new isolation, and remove legacy records through the storage backend or allow them to expire.
+
+<!-- /coderabbit-ai-generated:v1 -->
 - Tool handlers access tokens strictly through `ToolContext::get_downstream_token(service, scopes)`, ensuring zero-trust credential isolation.
 
 ---
