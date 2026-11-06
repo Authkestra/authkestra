@@ -87,7 +87,8 @@ async fn test_challenger_session_revoked_and_credential_change_deletions() {
         "CredentialChange Revoke must actively delete session from store"
     );
 
-    // 3. CredentialChange with ChangeType::Delete deletes session
+    // 3. CredentialChange with ChangeType::Delete deletes session when resolved,
+    // and user-scoped subjects without resolver fail closed.
     let s3 = make_test_session("sess-cred-delete");
     store.save_session(&s3).await.unwrap();
     assert!(store
@@ -100,16 +101,46 @@ async fn test_challenger_session_revoked_and_credential_change_deletions() {
         SecurityEventToken::new(ISSUER, "jti-3", Utc::now().timestamp(), BTreeMap::new());
     set3.sub_id = Some(SubjectIdentifier::IssSub {
         iss: ISSUER.to_string(),
-        sub: "sess-cred-delete".to_string(),
+        sub: "user-for-sess-cred-delete".to_string(),
     });
     let ev3 = CaepEvent::CredentialChange(CredentialChange::new(
         CredentialType::Fido2Platform,
         ChangeType::Delete,
     ));
-    handler
+
+    // Default handler rejects user-scoped IssSub without resolver
+    let rejection = handler.handle(&set3, &ev3).await.unwrap_err();
+    assert!(matches!(
+        rejection,
+        authkestra_ssf::HandlerError::Rejected(_)
+    ));
+
+    // With configured resolver, user-scoped IssSub resolves and revokes session
+    struct DeleteResolver;
+    #[async_trait::async_trait]
+    impl authkestra_ssf::SessionSubjectResolver for DeleteResolver {
+        async fn resolve_sessions(
+            &self,
+            _set: &SecurityEventToken,
+            _event: &CaepEvent,
+            subject: Option<&SubjectIdentifier>,
+        ) -> Result<Vec<String>, authkestra_ssf::HandlerError> {
+            match subject {
+                Some(SubjectIdentifier::IssSub { sub, .. })
+                    if sub == "user-for-sess-cred-delete" =>
+                {
+                    Ok(vec!["sess-cred-delete".to_string()])
+                }
+                _ => Ok(vec![]),
+            }
+        }
+    }
+    let resolving_handler =
+        SessionRevocationHandler::with_resolver(store.clone(), Arc::new(DeleteResolver));
+    resolving_handler
         .handle(&set3, &ev3)
         .await
-        .expect("handle CredentialChange Delete");
+        .expect("handle CredentialChange Delete with resolver");
     assert!(
         store
             .load_session("sess-cred-delete")

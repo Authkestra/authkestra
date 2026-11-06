@@ -94,4 +94,4 @@ pub use verify::{SetVerifier, SetVerifierBuilder, SetVerifierError, VerifiedSet}
 #[cfg(feature = "session")]
 pub mod session;
 #[cfg(feature = "session")]
-pub use session::SessionRevocationHandler;
+pub use session::{SessionRevocationHandler, SessionSubjectResolver};

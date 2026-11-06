@@ -76,12 +76,12 @@ async fn admin_action(
 async fn test_axum_policy_guard_permit_and_deny() {
     let policies = r#"
         permit(
-            principal == User::"github|alice",
+            principal == User::"github:alice",
             action == Action::"read",
             resource == Resource::"doc_1"
         );
         forbid(
-            principal == User::"github|bob",
+            principal == User::"github:bob",
             action,
             resource
         );

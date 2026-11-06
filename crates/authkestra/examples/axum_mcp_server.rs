@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         McpSecurityTier::Public,
         |args, _ctx: ToolContext| async move {
             let msg = args["message"].as_str().unwrap_or("hello from public tool");
-            tracing::info!(message = %msg, "executing public echo tool");
+            tracing::info!(message = ?msg, "executing public echo tool");
             Ok(ToolCallResult::text(format!("Echo: {msg}")))
         },
     )

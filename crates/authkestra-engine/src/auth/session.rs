@@ -33,7 +33,7 @@ impl std::fmt::Debug for SessionConfig {
             .field("same_site", &self.same_site)
             .field("path", &self.path)
             .field("max_age", &self.max_age)
-            .field("state_encryption_key", &"<redacted>")
+            .field("state_encryption_key", &"[REDACTED]")
             .finish()
     }
 }
@@ -175,7 +175,7 @@ mod tests {
         assert_ne!(c1.state_encryption_key, c2.state_encryption_key);
         assert_ne!(c1.state_encryption_key, [0u8; 32]);
         let dbg = format!("{c1:?}");
-        assert!(dbg.contains("<redacted>"));
+        assert!(dbg.contains("[REDACTED]"));
     }
 
     /// Verifies that `SessionConfig::new` preserves an explicit key.
@@ -184,6 +184,15 @@ mod tests {
         let key = [42u8; 32];
         let cfg = SessionConfig::new(key);
         assert_eq!(cfg.state_encryption_key, key);
+    }
+
+    #[test]
+    fn session_config_debug_redacts_state_encryption_key() {
+        let mut config = SessionConfig::default();
+        config.state_encryption_key = [0x42; 32];
+        let debug_output = format!("{config:?}");
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains("66"));
     }
 
     /// Verifies relative URL validation and `resolve_redirect_target` fallback rules.

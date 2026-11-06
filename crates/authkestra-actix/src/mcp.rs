@@ -40,8 +40,8 @@ fn get_router(req: &HttpRequest) -> Option<Arc<McpRouter>> {
     None
 }
 
-/// Extracts caller identity from request extensions, app data, or headers.
-fn extract_identity(req: &HttpRequest) -> Option<Identity> {
+/// Extracts caller identity from verified request extensions, app data, or opt-in unverified headers.
+fn extract_identity(router: &McpRouter, req: &HttpRequest) -> Option<Identity> {
     if let Some(id) = req.extensions().get::<Identity>() {
         tracing::debug!(
             provider_id = %id.provider_id,
@@ -58,6 +58,26 @@ fn extract_identity(req: &HttpRequest) -> Option<Identity> {
             "resolved caller identity from request extensions (Arc<Identity>)"
         );
         return Some((**id).clone());
+    }
+
+    #[cfg(feature = "session")]
+    if let Some(s) = req.extensions().get::<crate::AuthSession>() {
+        tracing::debug!(
+            provider_id = %s.0.identity.provider_id,
+            external_id = %s.0.identity.external_id,
+            "resolved caller identity from request extensions (AuthSession)"
+        );
+        return Some(s.0.identity.clone());
+    }
+
+    #[cfg(feature = "session")]
+    if let Some(s) = req.extensions().get::<authkestra_engine::auth::Session>() {
+        tracing::debug!(
+            provider_id = %s.identity.provider_id,
+            external_id = %s.identity.external_id,
+            "resolved caller identity from request extensions (Session)"
+        );
+        return Some(s.identity.clone());
     }
 
     if let Some(d) = req.app_data::<web::Data<Identity>>() {
@@ -87,24 +107,30 @@ fn extract_identity(req: &HttpRequest) -> Option<Identity> {
         return Some((**id).clone());
     }
 
-    if let Some(raw_header) = req
-        .headers()
-        .get("x-authkestra-identity")
-        .and_then(|h| h.to_str().ok())
-    {
-        match serde_json::from_str::<Identity>(raw_header) {
-            Ok(id) => {
-                tracing::debug!(
-                    provider_id = %id.provider_id,
-                    external_id = %id.external_id,
-                    "resolved caller identity from x-authkestra-identity header"
-                );
-                return Some(id);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to parse x-authkestra-identity header");
+    if router.allows_unverified_identity_header() {
+        if let Some(raw_header) = req
+            .headers()
+            .get("x-authkestra-identity")
+            .and_then(|h| h.to_str().ok())
+        {
+            match serde_json::from_str::<Identity>(raw_header) {
+                Ok(id) => {
+                    tracing::debug!(
+                        provider_id = %id.provider_id,
+                        external_id = %id.external_id,
+                        "resolved caller identity from x-authkestra-identity header (unverified mode enabled)"
+                    );
+                    return Some(id);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse x-authkestra-identity header");
+                }
             }
         }
+    } else if req.headers().contains_key("x-authkestra-identity") {
+        tracing::warn!(
+            "ignoring unverified x-authkestra-identity header because allow_unverified_identity_header is not enabled"
+        );
     }
 
     tracing::debug!("no caller identity found in Actix request");
@@ -130,7 +156,7 @@ pub async fn actix_mcp_handler(req: HttpRequest, body_bytes: web::Bytes) -> Http
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let identity = extract_identity(&req);
+    let identity = extract_identity(&router, &req);
 
     let mut rpc_req: JsonRpcRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
@@ -293,7 +319,7 @@ pub async fn actix_approve_submit_handler(
         }
     };
 
-    let identity = match extract_identity(&req) {
+    let identity = match extract_identity(&router, &req) {
         Some(id) => id,
         None => {
             tracing::warn!(approval_id = %approval_id, "approver identity missing in step-up submission (actix)");
@@ -311,7 +337,6 @@ pub async fn actix_approve_submit_handler(
         Ok(result) => {
             tracing::info!(
                 approval_id = %approval_id,
-                execution_token = %result.execution_token,
                 "step-up challenge approved and execution token minted (actix)"
             );
             HttpResponse::Ok().json(result)

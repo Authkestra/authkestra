@@ -14,12 +14,12 @@ use std::sync::Arc;
 async fn test_mcp_router_cedar_policy_permit_and_deny() {
     let policies = r#"
         permit(
-            principal == User::"github|alice",
+            principal == User::"github:alice",
             action == Action::"call",
             resource == Tool::"admin_tool"
         );
         forbid(
-            principal == User::"github|bob",
+            principal == User::"github:bob",
             action,
             resource
         );

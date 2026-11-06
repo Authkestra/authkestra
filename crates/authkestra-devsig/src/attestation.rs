@@ -82,7 +82,7 @@ pub async fn verify_trust(
         .map_err(|e| VerifyError::Malformed(format!("invalid attestation claims: {e}")))?;
 
     if !config.trusted_issuers.contains(&raw_claims.iss) {
-        tracing::debug!(target: "authkestra_devsig", iss = %raw_claims.iss, "attestation rejected: untrusted issuer");
+        tracing::debug!(target: "authkestra_devsig", iss = ?raw_claims.iss, "attestation rejected: untrusted issuer");
         return Err(VerifyError::UntrustedIssuer(raw_claims.iss));
     }
 

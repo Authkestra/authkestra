@@ -199,7 +199,6 @@ pub async fn handle_oauth_callback_erased(
         chrono::Utc::now() + session_duration,
     );
 
-    let session_id = session.id.clone();
     let user_id = session.identity.external_id.clone();
     store.save_session(&session).await.map_err(|e| {
         tracing::error!(error = %e, "failed to persist the session after a successful login");
@@ -208,7 +207,7 @@ pub async fn handle_oauth_callback_erased(
             format!("Failed to save session: {e}"),
         )
     })?;
-    tracing::info!(%session_id, %user_id, "OAuth login completed; session created");
+    tracing::info!(%user_id, "OAuth login completed; session created");
 
     let cookie = create_axum_cookie(&config, session.id);
     cookies.add(cookie);
@@ -327,7 +326,7 @@ pub async fn logout(
             tracing::error!(error = %e, "failed to delete the session during logout");
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         })?;
-        tracing::info!(session_id = %id, "session deleted on logout");
+        tracing::info!("session deleted on logout");
     } else {
         // Still clears the cookie below, so this is a no-op logout rather
         // than an error — worth saying, since it looks like a failure to
@@ -638,7 +637,6 @@ pub async fn get_session(
         let _ = store.delete_session(&session_id).await;
         return Err(AxumError::Unauthorized("Session expired".to_string()));
     }
-
     tracing::info!(user_id = %session.identity.external_id, "successfully retrieved session");
     Ok(session)
 }

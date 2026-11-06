@@ -96,6 +96,7 @@ fn setup_test_router() -> McpRouter {
         .tool(scoped_tool)
         .tool(human_tool)
         .resource_metadata(metadata)
+        .allow_unverified_identity_header(true)
         .build()
 }
 
@@ -1140,4 +1141,113 @@ async fn test_adversarial_actix_approve_endpoint_adversarial_inputs() {
         .to_request();
     let res = test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// Tests that the Actix MCP router ignores unverified `x-authkestra-identity` headers by default.
+#[actix_web::test]
+async fn test_mcp_actix_rejects_unverified_identity_header_by_default() {
+    let pending_store = Arc::new(MemoryStore::new());
+    let execution_store = Arc::new(MemoryStore::new());
+
+    let scoped_tool = ToolDefinition::new(
+        "query_weather",
+        json!({"type": "object"}),
+        McpSecurityTier::Scoped {
+            required_scopes: vec!["scope:read".to_string()],
+        },
+        |_args, _ctx: ToolContext| async move { Ok(ToolCallResult::text("weather: 72F")) },
+    );
+
+    // Default router: allow_unverified_identity_header is FALSE
+    let router = McpRouter::builder(pending_store, execution_store)
+        .tool(scoped_tool)
+        .build();
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(Arc::new(router)))
+            .service(mcp_actix_scope("/mcp")),
+    )
+    .await;
+
+    let tool_call = json!({
+        "jsonrpc": JSONRPC_VERSION,
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "query_weather",
+            "arguments": {}
+        }
+    });
+
+    let identity = make_identity(&["scope:read"], 10, false);
+    let identity_str = serde_json::to_string(&identity).unwrap();
+
+    // Attacker sends unverified x-authkestra-identity header
+    let req = test::TestRequest::post()
+        .uri("/mcp")
+        .insert_header((header::CONTENT_TYPE, "application/json"))
+        .insert_header(("x-authkestra-identity", identity_str.as_str()))
+        .set_json(&tool_call)
+        .to_request();
+
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body_json: serde_json::Value = test::read_body_json(res).await;
+    // Header must be ignored, so caller is treated as anonymous -> RPC_UNAUTHORIZED
+    assert_eq!(body_json["error"]["code"], RPC_UNAUTHORIZED);
+}
+
+/// Tests that the Actix MCP router accepts `x-authkestra-identity` when explicitly opted in via builder.
+#[actix_web::test]
+async fn test_mcp_actix_allows_unverified_identity_header_when_opted_in() {
+    let pending_store = Arc::new(MemoryStore::new());
+    let execution_store = Arc::new(MemoryStore::new());
+
+    let scoped_tool = ToolDefinition::new(
+        "query_weather",
+        json!({"type": "object"}),
+        McpSecurityTier::Scoped {
+            required_scopes: vec!["scope:read".to_string()],
+        },
+        |_args, _ctx: ToolContext| async move { Ok(ToolCallResult::text("weather: 72F")) },
+    );
+
+    // Opt-in router: allow_unverified_identity_header is TRUE
+    let router = McpRouter::builder(pending_store, execution_store)
+        .tool(scoped_tool)
+        .allow_unverified_identity_header(true)
+        .build();
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(Arc::new(router)))
+            .service(mcp_actix_scope("/mcp")),
+    )
+    .await;
+
+    let tool_call = json!({
+        "jsonrpc": JSONRPC_VERSION,
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query_weather",
+            "arguments": {}
+        }
+    });
+
+    let identity = make_identity(&["scope:read"], 10, false);
+    let identity_str = serde_json::to_string(&identity).unwrap();
+
+    let req = test::TestRequest::post()
+        .uri("/mcp")
+        .insert_header((header::CONTENT_TYPE, "application/json"))
+        .insert_header(("x-authkestra-identity", identity_str.as_str()))
+        .set_json(&tool_call)
+        .to_request();
+
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body_json: serde_json::Value = test::read_body_json(res).await;
+    assert_eq!(body_json["result"]["content"][0]["text"], "weather: 72F");
 }

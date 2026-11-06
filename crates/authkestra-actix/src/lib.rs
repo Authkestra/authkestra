@@ -179,7 +179,6 @@ impl FromRequest for AuthSession {
                 let _ = store.get_ref().delete_session(&session_id).await;
                 return Err(actix_web::error::ErrorUnauthorized("Session expired"));
             }
-
             tracing::info!(user_id = %session.identity.external_id, "successfully extracted actix AuthSession");
             Ok(AuthSession(session))
         })

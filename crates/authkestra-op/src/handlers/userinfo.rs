@@ -233,8 +233,14 @@ async fn verify_dpop_binding<S: OpStore + ?Sized>(
     // slightly after `iat`, leaving a narrow but real replay window. Same
     // reasoning, and the same `+ 1s` boundary guard, as the `/token` and
     // resource-server paths.
-    let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(verified.iat, 0)
-        .unwrap_or_else(chrono::Utc::now)
+    let iat_dt =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(verified.iat, 0).ok_or_else(|| {
+            UserInfoErrorResponse {
+                error: "invalid_token".to_string(),
+                error_description: "The DPoP proof is invalid".to_string(),
+            }
+        })?;
+    let expires_at = iat_dt
         + chrono::Duration::seconds(crate::dpop::DPOP_PROOF_MAX_AGE_SECS)
         + chrono::Duration::seconds(1);
 
