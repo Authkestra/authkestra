@@ -1267,7 +1267,9 @@ mod tests {
     /// and authenticate fails closed instead of allowing MFA bypass.
     #[tokio::test]
     async fn test_has_enrolled_returns_true_for_legacy_raw_string_and_authenticate_fails_closed() {
-        let store = MemoryCredentialStore::new();
+        let store = MockStore {
+            creds: Mutex::new(HashMap::new()),
+        };
         store
             .save_credential(
                 "user-legacy",
