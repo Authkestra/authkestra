@@ -45,7 +45,7 @@ dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 redis = { version = "0.27", features = ["tokio-comp"] }
 tower-http = { version = "0.6", features = ["fs"] }
-actix-files = "0.6"
+actix-files = "0.7"
 rsa = "0.9"
 p256 = { version = "0.13", features = ["pem", "ecdsa", "jwk"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
