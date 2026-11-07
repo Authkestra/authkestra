@@ -54,11 +54,13 @@ impl ClientAssertionStore for RedisClientAssertionStore {
         expires_at: DateTime<Utc>,
     ) -> Result<bool, authkestra_engine::store::StoreError> {
         let now = Utc::now();
-        if expires_at <= now {
+        let diff = expires_at - now;
+        let ttl_ms = diff.num_milliseconds();
+        if ttl_ms <= 0 {
             tracing::debug!(jti = %jti, "Assertion is already expired; refusing without querying Redis");
             return Ok(false);
         }
-        let ttl_secs = (expires_at - now).num_seconds().max(1) as u64;
+        let ttl_secs = (ttl_ms as u64).div_ceil(1000).max(1);
 
         let mut conn = self.conn.clone();
         let res: Option<String> = redis::cmd("SET")
@@ -118,6 +120,28 @@ mod tests {
         assert!(
             !expired,
             "Already-expired assertion must be rejected immediately"
+        );
+
+        // 5. Fractional second TTL (1500ms) rounds upward to 2s, preventing premature expiry
+        let fractional_exp = Utc::now() + chrono::Duration::milliseconds(1500);
+        let recorded = store
+            .record_jti("fractional-jti", fractional_exp)
+            .await
+            .unwrap();
+        assert!(
+            recorded,
+            "Initial registration with fractional TTL must succeed"
+        );
+        // Verify key exists in Redis with PTTL > 1000ms (proving rounding up to 2s rather than truncating to 1s)
+        let mut conn = store.conn.clone();
+        let pttl: i64 = redis::cmd("PTTL")
+            .arg(store.key("fractional-jti"))
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            pttl > 1000,
+            "Replay marker PTTL ({pttl}ms) must exceed 1000ms so a 1500ms window is rounded up to 2s"
         );
     }
 }

@@ -21,6 +21,7 @@ serde_json = "1.0"
 diesel = { version = "2", features = ["sqlite", "r2d2", "chrono"] }
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
 
 [features]
 default = ["rustls-aws-lc-rs"]

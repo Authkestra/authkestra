@@ -254,9 +254,11 @@ pub async fn handle_oauth_callback_jwt_erased(
     let (identity, _token, _auth_state) =
         finalize_callback_erased(flow, &cookies, &params, &config).await?;
 
-    let user_id = identity.external_id.clone();
+    let sanitized_identity =
+        authkestra_engine::token::sanitize_identity_for_scopes(&identity, None);
+    let user_id = sanitized_identity.external_id.clone();
     let jwt = token_manager
-        .issue_user_token(identity, expires_in_secs, None, None)
+        .issue_user_token(sanitized_identity, expires_in_secs, None, None)
         // Not covered by a test, deliberately: signing with a fixed secret
         // has no reachable failure mode, so exercising this would mean
         // contriving one. Logged rather than dropped because if it ever does

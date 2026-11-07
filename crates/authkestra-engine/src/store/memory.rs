@@ -329,7 +329,10 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             .data
             .lock()
             .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
-        let mut indices = self.indices.lock().unwrap();
+        let mut indices = self
+            .indices
+            .lock()
+            .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
 
         data.insert(primary_key.to_string(), entry);
         indices.insert(secondary_key.to_string(), primary_key.to_string());
@@ -337,10 +340,61 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
         Ok(())
     }
 
+    async fn update_indexed_if(
+        &self,
+        primary_key: &str,
+        secondary_key: &str,
+        value: T,
+        ttl: Duration,
+        predicate: for<'a> fn(&'a T) -> bool,
+    ) -> Result<bool, StoreError> {
+        tracing::debug!(
+            primary_key = %primary_key,
+            secondary_key = %secondary_key,
+            "conditionally updating indexed record in memory store"
+        );
+        let mut data = self.data.lock().map_err(|e| {
+            tracing::error!(error = %e, "memory store data mutex poisoned in update_indexed_if");
+            StoreError::Internal(format!("mutex poisoned: {e}"))
+        })?;
+        let mut indices = self.indices.lock().map_err(|e| {
+            tracing::error!(error = %e, "memory store indices mutex poisoned in update_indexed_if");
+            StoreError::Internal(format!("mutex poisoned: {e}"))
+        })?;
+
+        let (expired, allowed) = match data.get(primary_key) {
+            Some(existing) if existing.is_expired() => (true, false),
+            Some(existing) => (false, predicate(&existing.value)),
+            None => (false, false),
+        };
+        if expired {
+            data.remove(primary_key);
+            if indices.get(secondary_key).map(|v| v.as_str()) == Some(primary_key) {
+                indices.remove(secondary_key);
+            }
+            return Ok(false);
+        }
+        if !allowed {
+            return Ok(false);
+        }
+
+        let entry = StoreEntry {
+            value,
+            expires_at: Some(Instant::now() + ttl),
+        };
+        data.insert(primary_key.to_string(), entry);
+        indices.insert(secondary_key.to_string(), primary_key.to_string());
+
+        Ok(true)
+    }
+
     async fn get_by_index(&self, secondary_key: &str) -> Result<Option<T>, StoreError> {
         tracing::debug!("loading by index from memory store");
         let primary_key_opt = {
-            let indices = self.indices.lock().unwrap();
+            let indices = self
+                .indices
+                .lock()
+                .map_err(|e| StoreError::Internal(format!("mutex poisoned: {e}")))?;
             indices.get(secondary_key).cloned()
         };
 
@@ -352,14 +406,25 @@ impl<T: Clone + Send + Sync + 'static> IndexedKvStore<T> for MemoryStore<T> {
             if let Some(entry) = data.get(&primary_key) {
                 if entry.is_expired() {
                     data.remove(&primary_key);
-                    // Also cleanup index opportunistically
-                    self.indices.lock().unwrap().remove(secondary_key);
+                    // Also cleanup index opportunistically if still pointing to this expired primary_key
+                    if let Ok(mut indices) = self.indices.lock() {
+                        if indices.get(secondary_key).map(|v| v.as_str())
+                            == Some(primary_key.as_str())
+                        {
+                            indices.remove(secondary_key);
+                        }
+                    }
                     return Ok(None);
                 }
                 return Ok(Some(entry.value.clone()));
             } else {
                 // Orphaned index pointer cleanup
-                self.indices.lock().unwrap().remove(secondary_key);
+                if let Ok(mut indices) = self.indices.lock() {
+                    if indices.get(secondary_key).map(|v| v.as_str()) == Some(primary_key.as_str())
+                    {
+                        indices.remove(secondary_key);
+                    }
+                }
             }
         }
         Ok(None)
@@ -870,6 +935,50 @@ mod tests {
 
         // Next get by index should return None (and internally clean up the orphaned index)
         assert_eq!(store.get_by_index("sk1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_update_indexed_if_preserves_reassigned_secondary_key_on_expiry() {
+        let store = MemoryStore::<String>::new();
+
+        // Save pk1 with sk1 and short TTL
+        store
+            .set_indexed(
+                "pk1",
+                "sk1",
+                "value1".to_string(),
+                Duration::from_millis(10),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        // Reassign sk1 to pk2 with a long TTL
+        store
+            .set_indexed("pk2", "sk1", "value2".to_string(), Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        // Calling update_indexed_if on pk1 should detect pk1 is expired and remove pk1,
+        // but must preserve sk1 in indices because sk1 now points to pk2.
+        let updated = store
+            .update_indexed_if(
+                "pk1",
+                "sk1",
+                "value1_new".to_string(),
+                Duration::from_secs(10),
+                |_| true,
+            )
+            .await
+            .unwrap();
+        assert!(!updated);
+
+        // sk1 must still resolve to pk2's value
+        assert_eq!(
+            store.get_by_index("sk1").await.unwrap(),
+            Some("value2".to_string())
+        );
     }
 
     #[cfg(any(feature = "webauthn", feature = "totp", feature = "recovery-codes"))]

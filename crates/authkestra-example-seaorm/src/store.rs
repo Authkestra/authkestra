@@ -394,10 +394,35 @@ mod queries {
         conn: &C,
         session: DeviceCodeSession,
     ) -> Result<(), StoreError> {
-        device_code_active_model(&session)?
-            .update(conn)
+        let existing = get_device_code(conn, &session.device_code).await?;
+        match existing {
+            Some(e) if matches!(e.status, DeviceCodeStatus::Pending) => {}
+            _ => {
+                tracing::warn!(
+                    device_code = %session.device_code,
+                    "seaorm update_device_code rejected: session missing or not in Pending state"
+                );
+                return Err(StoreError::NotFound);
+            }
+        }
+        let pending_status = serde_json::to_value(&DeviceCodeStatus::Pending)
+            .map_err(|e| StoreError::Internal(format!("failed to encode value as JSON: {e}")))?;
+        let mut active = device_code_active_model(&session)?;
+        active.device_code = ActiveValue::NotSet;
+        let result = device_code::Entity::update_many()
+            .set(active)
+            .filter(device_code::Column::DeviceCode.eq(&session.device_code))
+            .filter(device_code::Column::Status.eq(pending_status))
+            .exec(conn)
             .await
             .map_err(db_err)?;
+        if result.rows_affected != 1 {
+            tracing::warn!(
+                device_code = %session.device_code,
+                "seaorm update_device_code affected 0 rows (record missing or no longer Pending)"
+            );
+            return Err(StoreError::NotFound);
+        }
         Ok(())
     }
 

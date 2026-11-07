@@ -72,6 +72,12 @@ impl OpConfig {
     pub fn device_verification_uri(&self) -> String {
         format!("{}/device", self.issuer)
     }
+
+    /// Returns true if the given scope is supported by the provider.
+    /// If `scopes_supported` is unconfigured (empty), all scopes are permitted by the provider ceiling.
+    pub fn allows_scope(&self, scope: &str) -> bool {
+        self.scopes_supported.is_empty() || self.scopes_supported.iter().any(|s| s == scope)
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +117,16 @@ mod tests {
             config.device_verification_uri(),
             "http://example.com/device"
         );
+
+        // When scopes_supported is empty, any scope is allowed
+        assert!(config.allows_scope("openid"));
+        assert!(config.allows_scope("custom"));
+
+        // When scopes_supported is configured, only listed scopes are allowed
+        let mut restricted = config;
+        restricted.scopes_supported = vec!["openid".to_string(), "profile".to_string()];
+        assert!(restricted.allows_scope("openid"));
+        assert!(restricted.allows_scope("profile"));
+        assert!(!restricted.allows_scope("admin"));
     }
 }

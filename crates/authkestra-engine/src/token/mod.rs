@@ -191,6 +191,84 @@ fn reject_named_claim_collisions(
     )))
 }
 
+/// Sanitizes an [`Identity`] before it is serialized into an access token, ID token,
+/// or other client-visible credential.
+///
+/// 1. Strips sensitive internal attribute keys (`access_token`, `refresh_token`,
+///    `id_token`, `expires_at`, `client_secret`, `secret`).
+/// 2. Gates `email` and email-related attributes (`email_verified`) on the presence of
+///    the `"email"` scope token.
+/// 3. Gates `username` and profile-related attributes (`name`, `given_name`, `family_name`,
+///    `middle_name`, `nickname`, `preferred_username`, `profile`, `picture`, `website`,
+///    `gender`, `birthdate`, `zoneinfo`, `locale`, `updated_at`) on the presence of
+///    the `"profile"` scope token.
+pub fn sanitize_identity_for_scopes(identity: &Identity, scope: Option<&str>) -> Identity {
+    let mut clean = identity.clone();
+
+    // 1. Strip sensitive internal credentials from attributes
+    const SENSITIVE_ATTRS: &[&str] = &[
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "expires_at",
+        "client_secret",
+        "secret",
+    ];
+    for key in SENSITIVE_ATTRS {
+        clean.attributes.remove(*key);
+    }
+
+    if let Some(scope_str) = scope {
+        let has_email_scope = scope_str.split_whitespace().any(|tok| tok == "email");
+        let has_profile_scope = scope_str.split_whitespace().any(|tok| tok == "profile");
+
+        // 2. Gate email on granted "email" scope
+        if !has_email_scope {
+            clean.email = None;
+            clean.attributes.remove("email");
+            clean.attributes.remove("email_verified");
+        }
+
+        // 3. Gate profile on granted "profile" scope
+        if !has_profile_scope {
+            clean.username = None;
+            const PROFILE_ATTRS: &[&str] = &[
+                "name",
+                "given_name",
+                "family_name",
+                "middle_name",
+                "nickname",
+                "preferred_username",
+                "profile",
+                "picture",
+                "website",
+                "gender",
+                "birthdate",
+                "zoneinfo",
+                "locale",
+                "updated_at",
+            ];
+            for key in PROFILE_ATTRS {
+                clean.attributes.remove(*key);
+            }
+        }
+
+        tracing::debug!(
+            sub = %clean.external_id,
+            has_email = has_email_scope,
+            has_profile = has_profile_scope,
+            "Sanitized identity attributes for scopes"
+        );
+    } else {
+        tracing::debug!(
+            sub = %clean.external_id,
+            "Stripped sensitive credentials from identity attributes"
+        );
+    }
+
+    clean
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[non_exhaustive]
 pub struct Claims {
@@ -458,6 +536,8 @@ impl TokenManager {
         extra.insert("client_id".to_string(), client_id.into());
         reject_named_claim_collisions(&extra)?;
 
+        let sanitized_identity = sanitize_identity_for_scopes(&identity, scope.as_deref());
+
         let claims = Claims {
             iss: Some(issuer.to_string()),
             sub: identity.external_id.clone(),
@@ -467,7 +547,7 @@ impl TokenManager {
             nbf: Some(now),
             jti: Some(jti),
             scope,
-            identity: Some(identity),
+            identity: Some(sanitized_identity),
             extra,
         };
 
@@ -523,6 +603,8 @@ impl TokenManager {
         let jti = take_jti(&mut extra);
         reject_named_claim_collisions(&extra)?;
 
+        let sanitized_identity = sanitize_identity_for_scopes(&identity, scope.as_deref());
+
         let claims = Claims {
             iss: self.issuer.clone(),
             sub: identity.external_id.clone(),
@@ -532,7 +614,7 @@ impl TokenManager {
             nbf: Some(now),
             jti: Some(jti),
             scope,
-            identity: Some(identity),
+            identity: Some(sanitized_identity),
             extra,
         };
 
@@ -590,16 +672,29 @@ impl TokenManager {
         let jti = take_jti(&mut extra);
         reject_named_claim_collisions(&extra)?;
 
+        let mut clean_identity = identity;
+        const SENSITIVE_ATTRS: &[&str] = &[
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "expires_at",
+            "client_secret",
+            "secret",
+        ];
+        for key in SENSITIVE_ATTRS {
+            clean_identity.attributes.remove(*key);
+        }
+
         let mut claims = Claims {
             iss: self.issuer.clone(),
-            sub: identity.external_id.clone(),
+            sub: clean_identity.external_id.clone(),
             aud: Some(Audience::from(client_id)),
             exp: expiration,
             iat: now,
             nbf: Some(now),
             jti: Some(jti),
             scope: None,
-            identity: Some(identity),
+            identity: Some(clean_identity),
             extra,
         };
 
@@ -2069,6 +2164,132 @@ mod leeway_tests {
     fn the_configured_value_is_readable_back() {
         assert_eq!(manager().leeway(), DEFAULT_LEEWAY_SECS);
         assert_eq!(manager().with_leeway(5).leeway(), 5);
+    }
+
+    /// Verifies that `sanitize_identity_for_scopes` strips upstream provider credentials
+    /// while preserving safe custom claims.
+    #[test]
+    fn test_sanitize_identity_strips_sensitive_credentials() {
+        let mut attributes = HashMap::new();
+        attributes.insert("access_token".to_string(), "sens_at".to_string());
+        attributes.insert("refresh_token".to_string(), "sens_rt".to_string());
+        attributes.insert("id_token".to_string(), "sens_id".to_string());
+        attributes.insert("client_secret".to_string(), "sens_cs".to_string());
+        attributes.insert("secret".to_string(), "sens_sec".to_string());
+        attributes.insert("expires_at".to_string(), "123456789".to_string());
+        attributes.insert("custom_claim".to_string(), "safe_value".to_string());
+
+        let identity = Identity {
+            provider_id: "google".to_string(),
+            external_id: "usr-999".to_string(),
+            email: Some("usr@example.com".to_string()),
+            username: Some("usr999".to_string()),
+            attributes,
+        };
+
+        let sanitized = sanitize_identity_for_scopes(&identity, Some("openid email profile"));
+        assert_eq!(sanitized.external_id, "usr-999");
+        assert_eq!(sanitized.email.as_deref(), Some("usr@example.com"));
+        assert_eq!(sanitized.username.as_deref(), Some("usr999"));
+        assert_eq!(
+            sanitized.attributes.get("custom_claim").map(|s| s.as_str()),
+            Some("safe_value")
+        );
+        assert!(!sanitized.attributes.contains_key("access_token"));
+        assert!(!sanitized.attributes.contains_key("refresh_token"));
+        assert!(!sanitized.attributes.contains_key("id_token"));
+        assert!(!sanitized.attributes.contains_key("client_secret"));
+        assert!(!sanitized.attributes.contains_key("secret"));
+        assert!(!sanitized.attributes.contains_key("expires_at"));
+    }
+
+    /// Verifies that `sanitize_identity_for_scopes` strips email fields unless the `"email"` scope is granted.
+    #[test]
+    fn test_sanitize_identity_gates_email_on_scope() {
+        let mut attributes = HashMap::new();
+        attributes.insert("email".to_string(), "usr@example.com".to_string());
+        attributes.insert("email_verified".to_string(), "true".to_string());
+        attributes.insert("custom".to_string(), "val".to_string());
+
+        let identity = Identity {
+            provider_id: "github".to_string(),
+            external_id: "gh-1".to_string(),
+            email: Some("usr@example.com".to_string()),
+            username: None,
+            attributes,
+        };
+
+        // Without email scope: email stripped
+        let sanitized_no_email = sanitize_identity_for_scopes(&identity, Some("openid"));
+        assert_eq!(sanitized_no_email.email, None);
+        assert!(!sanitized_no_email.attributes.contains_key("email"));
+        assert!(!sanitized_no_email.attributes.contains_key("email_verified"));
+        assert_eq!(
+            sanitized_no_email
+                .attributes
+                .get("custom")
+                .map(|s| s.as_str()),
+            Some("val")
+        );
+
+        // With email scope: email retained
+        let sanitized_with_email =
+            sanitize_identity_for_scopes(&identity, Some("openid email other"));
+        assert_eq!(
+            sanitized_with_email.email.as_deref(),
+            Some("usr@example.com")
+        );
+        assert_eq!(
+            sanitized_with_email
+                .attributes
+                .get("email")
+                .map(|s| s.as_str()),
+            Some("usr@example.com")
+        );
+    }
+
+    /// Verifies that `sanitize_identity_for_scopes` strips profile fields unless the `"profile"` scope is granted.
+    #[test]
+    fn test_sanitize_identity_gates_profile_on_scope() {
+        let mut attributes = HashMap::new();
+        attributes.insert("name".to_string(), "Alice Smith".to_string());
+        attributes.insert(
+            "picture".to_string(),
+            "https://example.com/pic.png".to_string(),
+        );
+
+        let identity = Identity {
+            provider_id: "github".to_string(),
+            external_id: "gh-2".to_string(),
+            email: None,
+            username: Some("asmith".to_string()),
+            attributes,
+        };
+
+        // Without profile scope: username and profile attrs stripped
+        let sanitized_no_profile = sanitize_identity_for_scopes(&identity, Some("openid email"));
+        assert_eq!(sanitized_no_profile.username, None);
+        assert!(!sanitized_no_profile.attributes.contains_key("name"));
+        assert!(!sanitized_no_profile.attributes.contains_key("picture"));
+
+        // With profile scope: username and profile attrs kept
+        let sanitized_with_profile =
+            sanitize_identity_for_scopes(&identity, Some("openid profile"));
+        assert_eq!(sanitized_with_profile.username.as_deref(), Some("asmith"));
+        assert_eq!(
+            sanitized_with_profile
+                .attributes
+                .get("name")
+                .map(|s| s.as_str()),
+            Some("Alice Smith")
+        );
+        assert_eq!(
+            sanitized_with_profile
+                .attributes
+                .get("picture")
+                .map(|s| s.as_str()),
+            Some("https://example.com/pic.png")
+        );
     }
 
     #[test]

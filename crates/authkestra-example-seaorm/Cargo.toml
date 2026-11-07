@@ -25,6 +25,7 @@ sea-orm = { version = "1", features = [
     "with-chrono",
     "with-json",
 ] }
+tracing = "0.1"
 
 [features]
 default = ["rustls-aws-lc-rs"]

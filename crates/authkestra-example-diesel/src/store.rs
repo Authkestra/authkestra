@@ -5,7 +5,7 @@ use authkestra_engine::store::sqlite_url::is_private_memory_url;
 use authkestra_engine::store::StoreError;
 use authkestra_op::client::{ClientRegistration, ClientStore};
 use authkestra_op::code::{AuthorizationCode, AuthorizationCodeStore};
-use authkestra_op::device::{DeviceCodeSession, DeviceCodeStore};
+use authkestra_op::device::{DeviceCodeSession, DeviceCodeStatus, DeviceCodeStore};
 use authkestra_op::refresh::{RefreshToken, RefreshTokenStore};
 use authkestra_op::store::OpStore;
 use diesel::connection::{AnsiTransactionManager, TransactionManager};
@@ -583,10 +583,34 @@ mod queries {
         row: DeviceCodeRow,
         device_code: String,
     ) -> Result<(), StoreError> {
-        diesel::update(oauth_device_codes::table.find(device_code))
-            .set(&row)
-            .execute(conn)
-            .map_err(diesel_err)?;
+        let existing = get_device_code(conn, device_code.clone())?;
+        match existing {
+            Some(e) if matches!(e.status, DeviceCodeStatus::Pending) => {}
+            _ => {
+                tracing::warn!(
+                    device_code = %device_code,
+                    "diesel update_device_code rejected: session missing or not in Pending state"
+                );
+                return Err(StoreError::NotFound);
+            }
+        }
+        let pending_status = serde_json::to_string(&DeviceCodeStatus::Pending)
+            .map_err(|_| StoreError::Internal("db".into()))?;
+        let affected = diesel::update(
+            oauth_device_codes::table
+                .filter(oauth_device_codes::device_code.eq(&device_code))
+                .filter(oauth_device_codes::status.eq(pending_status)),
+        )
+        .set(&row)
+        .execute(conn)
+        .map_err(diesel_err)?;
+        if affected != 1 {
+            tracing::warn!(
+                device_code = %device_code,
+                "diesel update_device_code affected 0 rows (record missing or no longer Pending)"
+            );
+            return Err(StoreError::NotFound);
+        }
         Ok(())
     }
 

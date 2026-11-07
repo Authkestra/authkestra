@@ -118,9 +118,17 @@ pub async fn handle_device_authorization(
     // verbatim into the stored device session with no check at all.
     for s in scope.split_whitespace() {
         if !client.allows_scope(s) {
+            tracing::warn!(client_id = %client.client_id, scope = %s, "Client requested unauthorized scope");
             return Err(DeviceAuthorizationErrorResponse {
                 error: "invalid_scope".to_string(),
                 error_description: format!("Scope {s} is not allowed for this client"),
+            });
+        }
+        if !config.allows_scope(s) {
+            tracing::warn!(client_id = %client.client_id, scope = %s, "Client requested scope not supported by provider");
+            return Err(DeviceAuthorizationErrorResponse {
+                error: "invalid_scope".to_string(),
+                error_description: format!("Scope {s} is not supported by this provider"),
             });
         }
     }

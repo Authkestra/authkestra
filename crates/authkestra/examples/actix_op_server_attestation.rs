@@ -54,6 +54,7 @@ impl SecondFactorVerifier for DemoOtpVerifier {
         subject: &str,
         principal_type: PrincipalType,
         proof: &SecondFactorProof,
+        _attributes: &serde_json::Value,
     ) -> Result<(), OpError> {
         // Enforce expected demo subject and principal type to prevent unauthorized
         // key enrollment under arbitrary identities (CWE-287 / Rows 1, 14).

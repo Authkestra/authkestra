@@ -127,11 +127,19 @@ impl DeviceCodeStore for TestOpStore {
     }
 
     async fn update_device_code(&mut self, session: DeviceCodeSession) -> Result<(), StoreError> {
-        self.devices
-            .lock()
-            .unwrap()
-            .insert(session.device_code.clone(), session);
-        Ok(())
+        let mut devices = self.devices.lock().unwrap();
+        match devices.get(&session.device_code) {
+            Some(existing)
+                if matches!(
+                    existing.status,
+                    authkestra_op::device::DeviceCodeStatus::Pending
+                ) =>
+            {
+                devices.insert(session.device_code.clone(), session);
+                Ok(())
+            }
+            _ => Err(StoreError::NotFound),
+        }
     }
 
     async fn delete_device_code(&mut self, device_code: &str) -> Result<(), StoreError> {

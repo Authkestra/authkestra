@@ -61,16 +61,17 @@ fn make_proof(kind: &str, value: &str) -> SecondFactorProof {
 #[tokio::test]
 async fn test_example_demo_otp_verifier_allows_valid_demo_subject_and_type() {
     let proof = make_proof("demo_otp", "123456");
+    let attrs = serde_json::Value::Null;
 
     let axum_verifier = axum_attestation::DemoOtpVerifier;
     let res_axum = axum_verifier
-        .verify("user-42", PrincipalType::Device, &proof)
+        .verify("user-42", PrincipalType::Device, &proof, &attrs)
         .await;
     assert!(res_axum.is_ok());
 
     let actix_verifier = actix_attestation::DemoOtpVerifier;
     let res_actix = actix_verifier
-        .verify("user-42", PrincipalType::Device, &proof)
+        .verify("user-42", PrincipalType::Device, &proof, &attrs)
         .await;
     assert!(res_actix.is_ok());
 }
@@ -79,21 +80,22 @@ async fn test_example_demo_otp_verifier_allows_valid_demo_subject_and_type() {
 #[tokio::test]
 async fn test_example_demo_otp_verifier_rejects_arbitrary_subject() {
     let proof = make_proof("demo_otp", "123456");
+    let attrs = serde_json::Value::Null;
 
     let axum_verifier = axum_attestation::DemoOtpVerifier;
     let res = axum_verifier
-        .verify("attacker-99", PrincipalType::Device, &proof)
+        .verify("attacker-99", PrincipalType::Device, &proof, &attrs)
         .await;
     assert!(matches!(res, Err(OpError::SecondFactorFailed)));
 
     let empty_res = axum_verifier
-        .verify("", PrincipalType::Device, &proof)
+        .verify("", PrincipalType::Device, &proof, &attrs)
         .await;
     assert!(matches!(empty_res, Err(OpError::SecondFactorFailed)));
 
     let actix_verifier = actix_attestation::DemoOtpVerifier;
     let res_actix = actix_verifier
-        .verify("attacker-99", PrincipalType::Device, &proof)
+        .verify("attacker-99", PrincipalType::Device, &proof, &attrs)
         .await;
     assert!(matches!(res_actix, Err(OpError::SecondFactorFailed)));
 }
@@ -102,16 +104,17 @@ async fn test_example_demo_otp_verifier_rejects_arbitrary_subject() {
 #[tokio::test]
 async fn test_example_demo_otp_verifier_rejects_unauthorized_principal_type() {
     let proof = make_proof("demo_otp", "123456");
+    let attrs = serde_json::Value::Null;
 
     let axum_verifier = axum_attestation::DemoOtpVerifier;
     let res = axum_verifier
-        .verify("user-42", PrincipalType::Service, &proof)
+        .verify("user-42", PrincipalType::Service, &proof, &attrs)
         .await;
     assert!(matches!(res, Err(OpError::SecondFactorFailed)));
 
     let actix_verifier = actix_attestation::DemoOtpVerifier;
     let res_actix = actix_verifier
-        .verify("user-42", PrincipalType::Service, &proof)
+        .verify("user-42", PrincipalType::Service, &proof, &attrs)
         .await;
     assert!(matches!(res_actix, Err(OpError::SecondFactorFailed)));
 }
@@ -120,22 +123,23 @@ async fn test_example_demo_otp_verifier_rejects_unauthorized_principal_type() {
 #[tokio::test]
 async fn test_example_demo_otp_verifier_rejects_invalid_proof() {
     let axum_verifier = axum_attestation::DemoOtpVerifier;
+    let attrs = serde_json::Value::Null;
 
     let wrong_otp = make_proof("demo_otp", "000000");
     let res = axum_verifier
-        .verify("user-42", PrincipalType::Device, &wrong_otp)
+        .verify("user-42", PrincipalType::Device, &wrong_otp, &attrs)
         .await;
     assert!(matches!(res, Err(OpError::SecondFactorFailed)));
 
     let wrong_kind = make_proof("sms_otp", "123456");
     let res2 = axum_verifier
-        .verify("user-42", PrincipalType::Device, &wrong_kind)
+        .verify("user-42", PrincipalType::Device, &wrong_kind, &attrs)
         .await;
     assert!(matches!(res2, Err(OpError::SecondFactorFailed)));
 
     let actix_verifier = actix_attestation::DemoOtpVerifier;
     let res_actix = actix_verifier
-        .verify("user-42", PrincipalType::Device, &wrong_otp)
+        .verify("user-42", PrincipalType::Device, &wrong_otp, &attrs)
         .await;
     assert!(matches!(res_actix, Err(OpError::SecondFactorFailed)));
 }

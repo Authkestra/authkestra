@@ -156,4 +156,66 @@ pub async fn run_indexed_store_tests<
     store.consume("pk1").await.unwrap();
 
     assert_eq!(store.get_by_index("sk1").await.unwrap(), None);
+
+    // Verify update_indexed_if behavior:
+    // 1. Non-existent primary key returns Ok(false)
+    let res_missing = store
+        .update_indexed_if(
+            "pk_missing",
+            "sk_missing",
+            "val_new".to_string(),
+            Duration::from_secs(10),
+            |_| true,
+        )
+        .await
+        .unwrap();
+    assert!(!res_missing);
+
+    // 2. Existing key with failing predicate returns Ok(false) and leaves value untouched
+    store
+        .set_indexed(
+            "pk_cond",
+            "sk_cond",
+            "initial".to_string(),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+    let res_predicate_false = store
+        .update_indexed_if(
+            "pk_cond",
+            "sk_cond",
+            "replacement".to_string(),
+            Duration::from_secs(10),
+            |val| val == "unexpected",
+        )
+        .await
+        .unwrap();
+    assert!(!res_predicate_false);
+    assert_eq!(
+        store.get("pk_cond").await.unwrap(),
+        Some("initial".to_string())
+    );
+
+    // 3. Existing key with passing predicate returns Ok(true) and updates both primary and index
+    let res_predicate_true = store
+        .update_indexed_if(
+            "pk_cond",
+            "sk_cond",
+            "updated".to_string(),
+            Duration::from_secs(10),
+            |val| val == "initial",
+        )
+        .await
+        .unwrap();
+    assert!(res_predicate_true);
+    assert_eq!(
+        store.get("pk_cond").await.unwrap(),
+        Some("updated".to_string())
+    );
+    assert_eq!(
+        store.get_by_index("sk_cond").await.unwrap(),
+        Some("updated".to_string())
+    );
 }
