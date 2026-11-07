@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-resource-v0.14.0...authkestra-resource-v0.15.0) - 2026-11-07
+
+### Fixed
+
+- *(resource)* enforce JWT not-before validation with configured leeway ([#426](https://github.com/Authkestra/authkestra/pull/426))
+- *(sec)* policy, MCP, devsig, and SSF security hardening (Cluster 6) ([#434](https://github.com/Authkestra/authkestra/pull/434))
+- *(security)* validate nbf, required spec claims, and dpop iat bounds (Cluster 2) ([#430](https://github.com/Authkestra/authkestra/pull/430))
+
 ## [0.13.3](https://github.com/Authkestra/authkestra/compare/authkestra-resource-v0.13.2...authkestra-resource-v0.13.3) - 2026-10-26
 
 ### Added

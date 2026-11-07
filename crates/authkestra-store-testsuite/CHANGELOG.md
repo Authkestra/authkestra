@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-store-testsuite-v0.14.0...authkestra-store-testsuite-v0.15.0) - 2026-11-07
+
+### Fixed
+
+- *(op)* cluster 5 authorization, scope, audience, and replay hardening ([#433](https://github.com/Authkestra/authkestra/pull/433))
+
 ## [0.13.2](https://github.com/Authkestra/authkestra/compare/authkestra-store-testsuite-v0.13.1...authkestra-store-testsuite-v0.13.2) - 2026-10-26
 
 ### Added

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-devsig-v0.14.0...authkestra-devsig-v0.15.0) - 2026-11-07
+
+### Added
+
+- *(devsig)* [**breaking**] device-signature profile v1 with shared conformance vectors ([#440](https://github.com/Authkestra/authkestra/pull/440))
+
+### Fixed
+
+- *(sec)* policy, MCP, devsig, and SSF security hardening (Cluster 6) ([#434](https://github.com/Authkestra/authkestra/pull/434))
+- *(telemetry)* redact credentials from tracing and prevent log injection ([#429](https://github.com/Authkestra/authkestra/pull/429))
+
 ## [0.13.1](https://github.com/marcjazz/authkestra/compare/authkestra-devsig-v0.13.0...authkestra-devsig-v0.13.1) - 2026-09-26
 
 ### Other
