@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-op-v0.14.0...authkestra-op-v0.15.0) - 2026-11-07
+
+### Added
+
+- *(op)* opt-in DPoP-Nonce at the token endpoint (RFC 9449 §8) ([#441](https://github.com/Authkestra/authkestra/pull/441))
+
+### Fixed
+
+- *(op)* cluster 5 authorization, scope, audience, and replay hardening ([#433](https://github.com/Authkestra/authkestra/pull/433))
+- *(security)* session expiry, CSRF protection, and open redirect hardening (Cluster 3) ([#431](https://github.com/Authkestra/authkestra/pull/431))
+- *(security)* validate nbf, required spec claims, and dpop iat bounds (Cluster 2) ([#430](https://github.com/Authkestra/authkestra/pull/430))
+- *(telemetry)* redact credentials from tracing and prevent log injection ([#429](https://github.com/Authkestra/authkestra/pull/429))
+
 ## [0.14.0](https://github.com/Authkestra/authkestra/compare/authkestra-op-v0.13.3...authkestra-op-v0.14.0) - 2026-11-03
 
 ### Added

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-v0.14.0...authkestra-v0.15.0) - 2026-11-07
+
+### Added
+
+- *(devsig)* [**breaking**] device-signature profile v1 with shared conformance vectors ([#440](https://github.com/Authkestra/authkestra/pull/440))
+
+### Fixed
+
+- *(op)* cluster 5 authorization, scope, audience, and replay hardening ([#433](https://github.com/Authkestra/authkestra/pull/433))
+
 ## [0.13.3](https://github.com/Authkestra/authkestra/compare/authkestra-v0.13.2...authkestra-v0.13.3) - 2026-10-26
 
 ### Added
