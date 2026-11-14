@@ -53,7 +53,7 @@ pub async fn verify(
 /// [`verify`], at the time `now` instead of the system clock.
 ///
 /// For a host that keeps its own clock, and for conformance: the profile v1 vectors
-/// (`conformance/devsig-profile-v1/vectors.json`) are minted at fixed timestamps and carry the
+/// (`crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json`) are minted at fixed timestamps and carry the
 /// `now` each one is checked at, so every implementation that runs them — this crate, a client
 /// library's verifier, a server under test — reaches the same verdict on any day. Everything
 /// else, including the order of the checks and the replay store's behaviour, is [`verify`]'s.

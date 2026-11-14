@@ -703,3 +703,161 @@ async fn device_verify_accepts_valid_csrf_token() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await["success"], true);
 }
+
+struct RevokedStatusProvider;
+
+#[async_trait]
+impl authkestra_op::attestation::AttestationStatusProvider for RevokedStatusProvider {
+    async fn current_attributes(
+        &self,
+        _subject: &str,
+        _principal_id: &str,
+        _principal_type: authkestra_op::attestation::PrincipalType,
+    ) -> Result<Option<serde_json::Value>, authkestra_op::OpError> {
+        Ok(None) // principal is revoked
+    }
+}
+
+#[derive(Clone)]
+struct TestAttestationState {
+    tokens: Arc<TokenManager>,
+    challenges: Arc<dyn authkestra_op::attestation::EnrolmentChallengeStore>,
+    second_factor: Arc<dyn authkestra_op::attestation::SecondFactorVerifier>,
+    status: Option<Arc<dyn authkestra_op::attestation::AttestationStatusProvider>>,
+    config: authkestra_op::attestation::AttestationConfig,
+}
+
+impl axum::extract::FromRef<TestAttestationState>
+    for Result<
+        Arc<dyn authkestra_op::attestation::EnrolmentChallengeStore>,
+        authkestra_axum::AxumError,
+    >
+{
+    fn from_ref(state: &TestAttestationState) -> Self {
+        Ok(state.challenges.clone())
+    }
+}
+
+impl axum::extract::FromRef<TestAttestationState>
+    for Result<
+        Arc<dyn authkestra_op::attestation::SecondFactorVerifier>,
+        authkestra_axum::AxumError,
+    >
+{
+    fn from_ref(state: &TestAttestationState) -> Self {
+        Ok(state.second_factor.clone())
+    }
+}
+
+impl axum::extract::FromRef<TestAttestationState>
+    for Option<Arc<dyn authkestra_op::attestation::AttestationStatusProvider>>
+{
+    fn from_ref(state: &TestAttestationState) -> Self {
+        state.status.clone()
+    }
+}
+
+impl axum::extract::FromRef<TestAttestationState>
+    for Result<Arc<TokenManager>, authkestra_axum::AxumError>
+{
+    fn from_ref(state: &TestAttestationState) -> Self {
+        Ok(state.tokens.clone())
+    }
+}
+
+impl axum::extract::FromRef<TestAttestationState>
+    for authkestra_op::attestation::AttestationConfig
+{
+    fn from_ref(state: &TestAttestationState) -> Self {
+        state.config.clone()
+    }
+}
+
+struct DummyVerifier;
+#[async_trait]
+impl authkestra_op::attestation::SecondFactorVerifier for DummyVerifier {
+    async fn verify(
+        &self,
+        _subject: &str,
+        _principal_type: authkestra_op::attestation::PrincipalType,
+        _proof: &authkestra_op::attestation::SecondFactorProof,
+        _attributes: &serde_json::Value,
+    ) -> Result<(), authkestra_op::OpError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn reissue_with_revoked_principal_returns_403_device_revoked() {
+    let tokens = Arc::new(TokenManager::new(
+        b"a-test-signing-key-that-is-32-bytes!!",
+        Some("https://op.example.com".to_string()),
+    ));
+    let challenges = Arc::new(authkestra_engine::store::memory::MemoryStore::<
+        authkestra_op::attestation::EnrolmentChallenge,
+    >::new());
+    let status_provider: Arc<dyn authkestra_op::attestation::AttestationStatusProvider> =
+        Arc::new(RevokedStatusProvider);
+
+    let state = TestAttestationState {
+        tokens: tokens.clone(),
+        challenges,
+        second_factor: Arc::new(DummyVerifier),
+        status: Some(status_provider),
+        config: authkestra_op::attestation::AttestationConfig::new(),
+    };
+
+    let router = authkestra_axum::op::OpExt::op_axum_attestation_router(&state).with_state(state);
+
+    let public_jwk = serde_json::json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    });
+    let jwk = authkestra_op::attestation::parse_public_jwk(&public_jwk).unwrap();
+    let jkt = authkestra_op::attestation::compute_cnf_jkt(&jwk).unwrap();
+
+    let mut extra = HashMap::new();
+    extra.insert("cnf".to_string(), serde_json::json!({ "jkt": jkt }));
+    extra.insert(
+        "did".to_string(),
+        serde_json::Value::String("device-revoked-1".to_string()),
+    );
+    extra.insert(
+        "principal_type".to_string(),
+        serde_json::Value::String("device".to_string()),
+    );
+    extra.insert(
+        "att".to_string(),
+        serde_json::json!({ "status": "active", "role": "ambient" }),
+    );
+
+    let attestation = tokens
+        .issue_custom_token("user-revoked".to_string(), 3600, "webank-attest+jws", extra)
+        .unwrap();
+
+    let req_body = serde_json::json!({
+        "attestation": attestation,
+        "public_jwk": public_jwk,
+    });
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/reissue")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(req_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body, serde_json::json!({ "error": "device_revoked" }));
+}

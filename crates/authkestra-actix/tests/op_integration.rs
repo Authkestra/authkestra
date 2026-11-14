@@ -672,3 +672,84 @@ async fn device_verify_accepts_valid_csrf_token_actix() {
     let body: serde_json::Value = test::read_body_json(resp).await;
     assert_eq!(body["success"], true);
 }
+
+struct RevokedStatusProvider;
+
+#[async_trait]
+impl authkestra_op::attestation::AttestationStatusProvider for RevokedStatusProvider {
+    async fn current_attributes(
+        &self,
+        _subject: &str,
+        _principal_id: &str,
+        _principal_type: authkestra_op::attestation::PrincipalType,
+    ) -> Result<Option<serde_json::Value>, authkestra_op::OpError> {
+        Ok(None) // principal is revoked
+    }
+}
+
+#[actix_web::test]
+async fn reissue_with_revoked_principal_returns_403_device_revoked() {
+    let tokens = Arc::new(TokenManager::new(
+        b"a-test-signing-key-that-is-32-bytes!!",
+        Some("https://op.example.com".to_string()),
+    ));
+    let challenges: Arc<dyn authkestra_op::attestation::EnrolmentChallengeStore> =
+        Arc::new(authkestra_engine::store::memory::MemoryStore::<
+            authkestra_op::attestation::EnrolmentChallenge,
+        >::new());
+    let status_provider: Arc<dyn authkestra_op::attestation::AttestationStatusProvider> =
+        Arc::new(RevokedStatusProvider);
+    let attestation_config = authkestra_op::attestation::AttestationConfig::new();
+
+    let app = test::init_service(
+        App::new()
+            .app_data(actix_web::web::Data::new(tokens.clone()))
+            .app_data(actix_web::web::Data::new(challenges))
+            .app_data(actix_web::web::Data::new(status_provider))
+            .app_data(actix_web::web::Data::new(attestation_config))
+            .service(().op_actix_scope()),
+    )
+    .await;
+
+    let public_jwk = serde_json::json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    });
+    let jwk = authkestra_op::attestation::parse_public_jwk(&public_jwk).unwrap();
+    let jkt = authkestra_op::attestation::compute_cnf_jkt(&jwk).unwrap();
+
+    let mut extra = HashMap::new();
+    extra.insert("cnf".to_string(), serde_json::json!({ "jkt": jkt }));
+    extra.insert(
+        "did".to_string(),
+        serde_json::Value::String("device-revoked-1".to_string()),
+    );
+    extra.insert(
+        "principal_type".to_string(),
+        serde_json::Value::String("device".to_string()),
+    );
+    extra.insert(
+        "att".to_string(),
+        serde_json::json!({ "status": "active", "role": "ambient" }),
+    );
+
+    let attestation = tokens
+        .issue_custom_token("user-revoked".to_string(), 3600, "webank-attest+jws", extra)
+        .unwrap();
+
+    let req = test::TestRequest::post()
+        .uri("/reissue")
+        .set_json(serde_json::json!({
+            "attestation": attestation,
+            "public_jwk": public_jwk,
+        }))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body, serde_json::json!({ "error": "device_revoked" }));
+}

@@ -509,9 +509,22 @@ where
 }
 
 /// Maps an `OpError` from the attestation ceremony to an HTTP status and an
-/// OAuth2-shaped `{error, error_description}` body, matching the style the
-/// other OP handlers in this file already use for their own error enums.
+/// OAuth2-shaped `{error, error_description}` body (except `PrincipalRevoked`,
+/// which answers `403 {"error": "device_revoked"}` per RFC-014 §6).
 fn attestation_error_response(err: OpError) -> Response {
+    if matches!(&err, OpError::PrincipalRevoked) {
+        tracing::warn!(
+            error = "device_revoked",
+            "attestation renewal refused: principal is revoked"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "device_revoked",
+            })),
+        )
+            .into_response();
+    }
     let status = match &err {
         OpError::BadJwk(_) | OpError::BadAlg(_) => StatusCode::BAD_REQUEST,
         OpError::InvalidChallenge
@@ -519,11 +532,9 @@ fn attestation_error_response(err: OpError) -> Response {
         | OpError::AttestationInvalid
         | OpError::KeyNotBound
         | OpError::SecondFactorFailed => StatusCode::UNAUTHORIZED,
-        OpError::PrincipalRevoked => StatusCode::FORBIDDEN,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let code = match &err {
-        OpError::PrincipalRevoked => "access_denied",
         OpError::BadJwk(_) | OpError::BadAlg(_) => "invalid_request",
         _ if status == StatusCode::INTERNAL_SERVER_ERROR => "server_error",
         _ => "invalid_grant",
@@ -845,5 +856,22 @@ mod dpop_header_tests {
         headers.insert("DPoP", HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap());
         let err = extract_dpop_header(&headers).expect_err("a non-ASCII header must be refused");
         assert_eq!(err.error, "invalid_dpop_proof");
+    }
+}
+
+#[cfg(test)]
+mod attestation_error_tests {
+    use super::*;
+    use authkestra_op::OpError;
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn principal_revoked_returns_403_device_revoked() {
+        let resp = attestation_error_response(OpError::PrincipalRevoked);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, serde_json::json!({ "error": "device_revoked" }));
     }
 }

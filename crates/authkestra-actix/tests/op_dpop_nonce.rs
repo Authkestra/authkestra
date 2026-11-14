@@ -158,6 +158,31 @@ async fn use_dpop_nonce_then_the_retry_with_the_served_nonce_succeeds() {
 }
 
 #[actix_web::test]
+async fn a_nonce_from_two_windows_ago_is_refused() {
+    let nonces = DpopNonces::new(
+        b"0123456789abcdef0123456789abcdef",
+        std::time::Duration::from_secs(300),
+    );
+    let stale_nonce = nonces.issue_at(chrono::Utc::now().timestamp() - 600);
+    let app = service!(Some(nonces));
+    let refused = test::call_service(
+        &app,
+        token_request(&proof("jti-stale", Some(&stale_nonce))).to_request(),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    let fresh = refused
+        .headers()
+        .get("dpop-nonce")
+        .expect("a stale-nonce refusal must carry a fresh DPoP-Nonce")
+        .to_str()
+        .unwrap();
+    assert_ne!(fresh, stale_nonce);
+    let body: serde_json::Value = test::read_body_json(refused).await;
+    assert_eq!(body["error"], "use_dpop_nonce");
+}
+
+#[actix_web::test]
 async fn without_nonces_a_proof_needs_none_and_no_header_is_sent() {
     let app = service!(None);
     let resp = test::call_service(&app, token_request(&proof("jti-3", None)).to_request()).await;

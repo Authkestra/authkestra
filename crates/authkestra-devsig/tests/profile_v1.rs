@@ -1,5 +1,5 @@
 //! Device-signature profile v1: the shared conformance vectors
-//! (`conformance/devsig-profile-v1/vectors.json`).
+//! (`crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json`).
 //!
 //! - [`vectors_file_is_fresh`] regenerates the file from `profile_v1_mint` and fails when the
 //!   committed copy differs (`AUTHKESTRA_UPDATE_VECTORS=1` rewrites it).
@@ -26,7 +26,7 @@ use profile_v1_mint::*;
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../conformance/devsig-profile-v1/vectors.json"
+    "/conformance/devsig-profile-v1/vectors.json"
 );
 
 // ---------------------------------------------------------------------------------------------
@@ -476,7 +476,7 @@ fn vectors_file_is_fresh() {
     let committed = std::fs::read_to_string(VECTORS).expect("read vectors.json");
     assert!(
         committed == generated,
-        "conformance/devsig-profile-v1/vectors.json is stale: run \
+        "crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json is stale: run \
          AUTHKESTRA_UPDATE_VECTORS=1 cargo test -p authkestra-devsig --test profile_v1 \
          and commit the result"
     );

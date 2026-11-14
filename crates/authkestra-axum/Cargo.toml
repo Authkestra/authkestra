@@ -88,6 +88,7 @@ rustls-no-provider = [
 async-trait = "0.1"
 authkestra-engine = { workspace = true, features = ["memory"] }
 http-body-util = "0.1"
+sha2 = { workspace = true }
 
 # Test-only: the OAuth callback's three failure modes all return 401, so the
 # only thing that tells a missing state cookie apart from an undecryptable one
@@ -117,6 +118,10 @@ required-features = ["macros", "session", "token", "op"]
 [[test]]
 name = "op_dpop_nonce"
 required-features = ["op"]
+
+[[test]]
+name = "resource_challenges"
+required-features = ["resource"]
 
 [[test]]
 name = "devsig_test"
