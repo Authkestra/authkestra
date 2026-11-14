@@ -345,6 +345,14 @@ pub fn id_token_extra_claims(
         );
     }
 
+    tracing::debug!(
+        has_email = extra.contains_key("email"),
+        has_email_verified = extra.contains_key("email_verified"),
+        has_name = extra.contains_key("name"),
+        has_preferred_username = extra.contains_key("preferred_username"),
+        "selected top-level OIDC claims for ID token"
+    );
+
     extra
 }
 

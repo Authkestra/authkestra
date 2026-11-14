@@ -216,12 +216,19 @@ where
                 tracing::warn!("authentication failed: no identity returned");
                 Err(AxumError::Unauthorized("Authentication failed".to_string()))
             }
-            Err(refusal) if refusal.status >= 500 => {
+            Err(mut refusal) if refusal.status >= 500 => {
                 let msg = refusal
                     .error_description
-                    .unwrap_or_else(|| refusal.error.clone());
-                tracing::error!(error = %msg, "internal error during authentication");
-                Err(AxumError::Internal(msg))
+                    .as_deref()
+                    .unwrap_or(&refusal.error);
+                tracing::error!(
+                    status = refusal.status,
+                    error = %msg,
+                    "internal error during authentication"
+                );
+                refusal.error_description =
+                    Some("An internal authentication error occurred.".to_string());
+                Err(AxumError::ResourceRefusal(refusal))
             }
             Err(refusal) => {
                 tracing::warn!(error = %refusal.error, "authentication refused with challenge");

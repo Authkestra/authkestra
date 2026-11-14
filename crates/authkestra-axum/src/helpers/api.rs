@@ -621,7 +621,45 @@ pub fn resource_refusal_response(
             headers.insert(axum::http::HeaderName::from_static("dpop-nonce"), val);
         }
     }
-    (status, headers, refusal.body()).into_response()
+    let body = if refusal.status >= 500 {
+        let mut redacted = refusal.clone();
+        redacted.error_description = Some("An internal authentication error occurred.".to_string());
+        redacted.body()
+    } else {
+        refusal.body()
+    };
+    (status, headers, body).into_response()
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::resource_refusal_response;
+    use authkestra_engine::token::refusal::{AuthScheme, ResourceRefusal};
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn resource_refusal_response_preserves_503_and_redacts_server_error_descriptions() {
+        let unavail =
+            ResourceRefusal::temporarily_unavailable(AuthScheme::Bearer, "jwks endpoint timed out");
+        let resp = resource_refusal_response(&unavail);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "temporarily_unavailable");
+        assert_eq!(
+            json["error_description"],
+            "An internal authentication error occurred."
+        );
+
+        let challenge = ResourceRefusal::invalid_token(AuthScheme::Bearer, "expired token");
+        let resp_401 = resource_refusal_response(&challenge);
+        assert_eq!(resp_401.status(), StatusCode::UNAUTHORIZED);
+        let body_401 = axum::body::to_bytes(resp_401.into_body(), 4096)
+            .await
+            .unwrap();
+        let json_401: serde_json::Value = serde_json::from_slice(&body_401).unwrap();
+        assert_eq!(json_401["error_description"], "expired token");
+    }
 }
 
 impl IntoResponse for AxumError {

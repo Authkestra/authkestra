@@ -510,5 +510,11 @@ async fn test_device_pending_poll_does_not_overwrite_concurrent_approval() {
     )
     .await
     .expect("concurrent approval must not be clobbered by the pending poll's write-back");
-    assert!(!second.access_token.is_empty());
+    let claims = tokens
+        .validate_token(&second.access_token, Some("client1"))
+        .expect("issued access token must validate for client1");
+    assert_eq!(claims.sub, "user1");
+    let identity = claims.identity.expect("access token must carry identity");
+    assert_eq!(identity.provider_id, "test");
+    assert_eq!(identity.external_id, "user1");
 }

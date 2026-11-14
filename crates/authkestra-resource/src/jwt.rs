@@ -990,10 +990,10 @@ fn build_validation(config: &ValidationConfig, multi_issuer: bool) -> Validation
 }
 
 enum InnerAuthOutcome {
-    Declined(crate::ResourceRefusal),
+    Declined(Box<crate::ResourceRefusal>),
     HardError {
         message: String,
-        refusal: crate::ResourceRefusal,
+        refusal: Box<crate::ResourceRefusal>,
     },
 }
 
@@ -1011,8 +1011,8 @@ where
     ) -> Result<Option<I>, crate::ResourceRefusal> {
         match self.authenticate_inner(parts).await {
             Ok(identity) => Ok(identity),
-            Err(InnerAuthOutcome::Declined(refusal)) => Err(refusal),
-            Err(InnerAuthOutcome::HardError { refusal, .. }) => Err(refusal),
+            Err(InnerAuthOutcome::Declined(refusal)) => Err(*refusal),
+            Err(InnerAuthOutcome::HardError { refusal, .. }) => Err(*refusal),
         }
     }
 
@@ -1035,19 +1035,19 @@ where
                     | ValidationError::MissingIssuer),
                 ) => {
                     tracing::debug!(error = %e, "could not read or trust the token's issuer; no identity");
-                    return Err(InnerAuthOutcome::Declined(
+                    return Err(InnerAuthOutcome::Declined(Box::new(
                         crate::ResourceRefusal::invalid_token(
                             scheme,
                             "The access token issuer is invalid or untrusted",
                         ),
-                    ));
+                    )));
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "could not resolve a JWKS for the token's issuer; rejecting token");
                     let msg = e.to_string();
                     return Err(InnerAuthOutcome::HardError {
                         message: msg.clone(),
-                        refusal: crate::ResourceRefusal::internal_error(msg),
+                        refusal: Box::new(crate::ResourceRefusal::internal_error(msg)),
                     });
                 }
             };
@@ -1075,12 +1075,12 @@ where
                             Ok(c) => c,
                             Err(e) => {
                                 tracing::warn!(error = %e, "failed to re-decode token while checking cnf-based binding");
-                                return Err(InnerAuthOutcome::Declined(
+                                return Err(InnerAuthOutcome::Declined(Box::new(
                                     crate::ResourceRefusal::invalid_token(
                                         scheme,
                                         "The access token is invalid",
                                     ),
-                                ));
+                                )));
                             }
                         };
 
@@ -1092,12 +1092,12 @@ where
 
                             if let Err(e) = verify_cert_binding(cert_der, cnf_claim.cnf.as_ref()) {
                                 tracing::warn!(error = %e, "RFC 8705 certificate-binding check failed; rejecting token");
-                                return Err(InnerAuthOutcome::Declined(
+                                return Err(InnerAuthOutcome::Declined(Box::new(
                                     crate::ResourceRefusal::invalid_token(
                                         scheme,
                                         "Client certificate binding verification failed",
                                     ),
-                                ));
+                                )));
                             }
                         }
 
@@ -1126,24 +1126,24 @@ where
                                         "token is DPoP-bound (cnf.jkt) but was presented via \
                                          the Bearer scheme, not DPoP; rejecting"
                                     );
-                                    return Err(InnerAuthOutcome::Declined(
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
                                         crate::ResourceRefusal::invalid_token(
                                             crate::AuthScheme::DPoP,
                                             "DPoP-bound token must be presented using the DPoP authentication scheme",
                                         ),
-                                    ));
+                                    )));
                                 }
                                 (PresentedToken::DPoP(_), false) => {
                                     tracing::warn!(
                                         "request used the DPoP auth-scheme but the token \
                                          carries no cnf.jkt confirmation claim; rejecting"
                                     );
-                                    return Err(InnerAuthOutcome::Declined(
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
                                         crate::ResourceRefusal::invalid_token(
                                             crate::AuthScheme::DPoP,
                                             "Token presented with DPoP scheme is not DPoP-bound",
                                         ),
-                                    ));
+                                    )));
                                 }
                                 _ => {}
                             }
@@ -1152,11 +1152,11 @@ where
                                 Ok(h) => h,
                                 Err(e) => {
                                     tracing::warn!(error = %e, "malformed DPoP header; rejecting token");
-                                    return Err(InnerAuthOutcome::Declined(
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
                                         crate::ResourceRefusal::invalid_dpop_proof(
                                             "Malformed DPoP header",
                                         ),
-                                    ));
+                                    )));
                                 }
                             };
 
@@ -1181,9 +1181,9 @@ where
                                     tracing::info!(
                                         "DPoP proof lacks a current server nonce; challenging with use_dpop_nonce"
                                     );
-                                    return Err(InnerAuthOutcome::Declined(
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
                                         crate::ResourceRefusal::use_dpop_nonce(fresh_nonce),
-                                    ));
+                                    )));
                                 }
                                 // The credential itself is bad (missing/malformed
                                 // proof, wrong key, wrong ath, already-used jti,
@@ -1191,11 +1191,11 @@ where
                                 // every other "invalid token" outcome above.
                                 Err(e @ ValidationError::InvalidToken(_)) => {
                                     tracing::warn!(error = %e, "RFC 9449 DPoP binding check failed; rejecting token");
-                                    return Err(InnerAuthOutcome::Declined(
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
                                         crate::ResourceRefusal::invalid_dpop_proof(
                                             "The presented DPoP proof is invalid",
                                         ),
-                                    ));
+                                    )));
                                 }
                                 // Replay protection could not be *checked* at
                                 // all (store errored, or none is configured) —
@@ -1214,7 +1214,9 @@ where
                                     let msg = e.to_string();
                                     return Err(InnerAuthOutcome::HardError {
                                         message: msg.clone(),
-                                        refusal: crate::ResourceRefusal::internal_error(msg),
+                                        refusal: Box::new(crate::ResourceRefusal::internal_error(
+                                            msg,
+                                        )),
                                     });
                                 }
                             }
@@ -1226,7 +1228,7 @@ where
                                 cnf_claim.auth_time,
                                 scheme,
                             ) {
-                                return Err(InnerAuthOutcome::Declined(refusal));
+                                return Err(InnerAuthOutcome::Declined(Box::new(refusal)));
                             }
                         }
                     }
@@ -1242,12 +1244,12 @@ where
                 // above: under a first-success policy a decline is ordinary.
                 Err(e @ (ValidationError::InvalidToken(_) | ValidationError::Jwt(_))) => {
                     tracing::debug!(error = %e, "token failed validation; no identity");
-                    Err(InnerAuthOutcome::Declined(
+                    Err(InnerAuthOutcome::Declined(Box::new(
                         crate::ResourceRefusal::invalid_token(
                             scheme,
                             "The access token is invalid or expired",
                         ),
-                    ))
+                    )))
                 }
                 // Everything else — a JWKS that could not be fetched, a key
                 // that could not be found, replay protection that could not
@@ -1258,7 +1260,7 @@ where
                     let msg = e.to_string();
                     Err(InnerAuthOutcome::HardError {
                         message: msg.clone(),
-                        refusal: crate::ResourceRefusal::internal_error(msg),
+                        refusal: Box::new(crate::ResourceRefusal::internal_error(msg)),
                     })
                 }
             }
@@ -1518,6 +1520,10 @@ pub async fn verify_dpop_binding_with_nonces(
         let presented = authkestra_engine::token::dpop_nonce::dpop_proof_nonce(proof);
         let accepted = presented.as_deref().is_some_and(|n| nonces.accepts(n));
         if !accepted {
+            tracing::debug!(
+                had_nonce = presented.is_some(),
+                "DPoP proof rejected by server nonce verifier; issuing fresh nonce challenge"
+            );
             return Err(ValidationError::UseDpopNonce {
                 fresh_nonce: nonces.issue(),
             });

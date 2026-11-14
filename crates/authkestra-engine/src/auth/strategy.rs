@@ -30,9 +30,15 @@ pub trait AuthenticationStrategy<I>: Send + Sync {
     ) -> Result<Option<I>, crate::token::refusal::ResourceRefusal> {
         match self.authenticate(parts).await {
             Ok(opt) => Ok(opt),
-            Err(e) => Err(crate::token::refusal::ResourceRefusal::internal_error(
-                e.to_string(),
-            )),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "strategy returned error during default authenticate_with_refusal conversion"
+                );
+                Err(crate::token::refusal::ResourceRefusal::internal_error(
+                    e.to_string(),
+                ))
+            }
         }
     }
 }

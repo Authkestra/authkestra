@@ -98,6 +98,11 @@ impl OidcDiscovery {
             .grant_types_supported
             .iter()
             .any(|grant| grant == "urn:ietf:params:oauth:grant-type:device_code");
+        tracing::debug!(
+            has_authorization_code_grant,
+            has_device_code_grant,
+            "building OIDC discovery document from config"
+        );
 
         Self {
             issuer: config.issuer.clone(),
