@@ -186,6 +186,29 @@ async fn use_dpop_nonce_then_the_retry_with_the_served_nonce_succeeds() {
 }
 
 #[tokio::test]
+async fn a_nonce_from_two_windows_ago_is_refused() {
+    let nonces = DpopNonces::new(
+        b"0123456789abcdef0123456789abcdef",
+        std::time::Duration::from_secs(300),
+    );
+    let stale_nonce = nonces.issue_at(chrono::Utc::now().timestamp() - 600);
+    let refused = app(Some(nonces))
+        .await
+        .oneshot(token_request(&proof("jti-stale", Some(&stale_nonce))))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let fresh = refused
+        .headers()
+        .get("dpop-nonce")
+        .expect("a stale-nonce refusal must carry a fresh DPoP-Nonce")
+        .to_str()
+        .unwrap();
+    assert_ne!(fresh, stale_nonce);
+    assert_eq!(json(refused).await["error"], "use_dpop_nonce");
+}
+
+#[tokio::test]
 async fn without_nonces_a_proof_needs_none_and_no_header_is_sent() {
     let resp = app(None)
         .await

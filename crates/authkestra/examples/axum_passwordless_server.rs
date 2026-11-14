@@ -236,6 +236,19 @@ impl LocalFileDelivery {
                 opts.mode(0o600);
             }
             let mut file = opts.open(&path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = file.metadata()?.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!(
+                            "delivery file permissions {mode:#05o} expose group/other bits; require 0600 or stricter"
+                        ),
+                    ));
+                }
+            }
             file.write_all(line.as_bytes())?;
             file.flush()?;
             Ok(())
@@ -2428,6 +2441,34 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) -> ExampleRe
         assert_eq!(otp_verify.status(), StatusCode::OK);
         assert!(otp_verify.headers().get(header::SET_COOKIE).is_some());
         srv_handle.abort();
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissive_path = std::env::temp_dir().join(format!(
+            "authkestra-passwordless-permissive-{}.ndjson",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_file(&permissive_path);
+        std::fs::File::create(&permissive_path)?;
+        std::fs::set_permissions(&permissive_path, std::fs::Permissions::from_mode(0o644))?;
+
+        let delivery = LocalFileDelivery::new(&permissive_path);
+        let err = delivery
+            .deliver_otp("permissive@example.com", "email", "654321", 1_900_000_000)
+            .await
+            .expect_err("0644 delivery file must be rejected before writing secret");
+        assert!(
+            err.contains("Permission denied") || err.contains("group/other"),
+            "unexpected error: {err}"
+        );
+        let remaining = std::fs::read_to_string(&permissive_path)?;
+        let _ = std::fs::remove_file(&permissive_path);
+        assert!(
+            remaining.is_empty(),
+            "no secret must be written to a permissive delivery file"
+        );
     }
 
     Ok(())
