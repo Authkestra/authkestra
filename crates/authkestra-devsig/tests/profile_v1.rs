@@ -643,9 +643,13 @@ async fn an_accepted_vector_is_refused_a_second_time() {
     };
     let store = InMemoryReplayStore::new();
     let now = vector_now(vector);
-    verify_at(&signed, &config, &jwks, &store, now)
+    let identity = verify_at(&signed, &config, &jwks, &store, now)
         .await
         .expect("first use is accepted");
+    assert!(
+        identity.signed_at().is_some(),
+        "verified DeviceIdentity must expose the signature's iat via signed_at()"
+    );
     assert_eq!(
         verify_at(&signed, &config, &jwks, &store, now).await,
         Err(VerifyError::ReplayDetected)

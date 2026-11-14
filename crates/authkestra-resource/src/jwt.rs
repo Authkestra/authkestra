@@ -66,6 +66,10 @@ pub enum ValidationError {
     /// matters under `AuthPolicy::FirstSuccess`.
     #[error("DPoP replay protection could not be checked: {0}")]
     DpopReplayUnavailable(String),
+    /// The presented DPoP proof lacked a valid server-issued nonce (RFC 9449 §9).
+    /// Carries the fresh nonce to return in the `DPoP-Nonce` response header.
+    #[error("DPoP proof requires a fresh server nonce (use_dpop_nonce)")]
+    UseDpopNonce { fresh_nonce: String },
 }
 
 pub use authkestra_engine::token::jwk::Jwk;
@@ -77,6 +81,12 @@ pub struct Jwks {
 }
 
 impl Jwks {
+    /// Constructs an in-memory [`Jwks`] directly from a list of [`Jwk`]s without
+    /// making a network call (useful for static keys and unit tests).
+    pub fn from_keys(keys: Vec<Jwk>) -> Self {
+        Self { keys }
+    }
+
     /// Fetches a JWKS with a default [`reqwest::Client`], i.e. the platform trust store.
     ///
     /// Use [`Jwks::fetch_with`] when the endpoint is served by a CA the platform store does
@@ -173,6 +183,18 @@ impl JwksCache {
         }
     }
 
+    /// Constructs a [`JwksCache`] backed by a static, in-memory [`Jwks`] that
+    /// never makes outbound HTTP requests.
+    pub fn from_static(jwks: Jwks) -> Self {
+        Self {
+            jwks_uri: String::new(),
+            jwks: RwLock::new(Some((jwks, Instant::now()))),
+            ttl: Duration::from_secs(u64::MAX / 2),
+            require_kid: false,
+            client: reqwest::Client::new(),
+        }
+    }
+
     /// Replaces the HTTP client used to fetch the JWKS.
     ///
     /// The default client trusts only the platform certificate store, which makes a JWKS served
@@ -258,6 +280,11 @@ impl JwksCache {
 
     pub async fn refresh(&self) -> Result<Jwks, ValidationError> {
         let mut write_guard = self.jwks.write().await;
+        if self.jwks_uri.is_empty() {
+            if let Some((jwks, _)) = write_guard.as_ref() {
+                return Ok(jwks.clone());
+            }
+        }
         let jwks = Jwks::fetch_with(&self.client, &self.jwks_uri).await?;
         *write_guard = Some((jwks.clone(), Instant::now()));
         Ok(jwks)
@@ -487,6 +514,9 @@ pub struct ValidationConfig {
     /// from this map is rejected outright and never falls back to `jwks_url`.
     /// See [`IssuerTrustMap`] and issue #243.
     pub trusted_issuers: BTreeMap<String, String>,
+    /// Optional static in-memory [`Jwks`] used in place of fetching `jwks_url`
+    /// over HTTP (for static-key deployments and unit tests).
+    pub static_jwks: Option<Jwks>,
 }
 
 impl ValidationConfig {
@@ -501,6 +531,7 @@ impl ValidationConfig {
 #[non_exhaustive]
 pub struct ValidationConfigBuilder {
     jwks_url: Option<String>,
+    static_jwks: Option<Jwks>,
     refresh_interval: Option<Duration>,
     issuer: Option<String>,
     audience: Vec<String>,
@@ -519,11 +550,19 @@ pub struct ValidationConfigBuilder {
 impl ValidationConfigBuilder {
     /// Set the JWKS URL.
     ///
-    /// Required unless at least one [`trusted_issuer`](Self::trusted_issuer) is
-    /// configured, in which case each issuer brings its own endpoint and this
-    /// one applies only to the issuer named by [`issuer`](Self::issuer).
+    /// Required unless [`static_jwks`](Self::static_jwks) or at least one
+    /// [`trusted_issuer`](Self::trusted_issuer) is configured, in which case each
+    /// issuer brings its own endpoint and this one applies only to the issuer
+    /// named by [`issuer`](Self::issuer).
     pub fn jwks_url(mut self, jwks_url: impl Into<String>) -> Self {
         self.jwks_url = Some(jwks_url.into());
+        self
+    }
+
+    /// Supply a static, in-memory [`Jwks`] instead of fetching from a remote
+    /// `jwks_url`.
+    pub fn static_jwks(mut self, jwks: Jwks) -> Self {
+        self.static_jwks = Some(jwks);
         self
     }
 
@@ -669,8 +708,8 @@ impl ValidationConfigBuilder {
             Some(jwks_url) => jwks_url,
             None => {
                 assert!(
-                    !self.trusted_issuers.is_empty(),
-                    "JWKS URL must be set for ValidationConfig (or at least one trusted_issuer)"
+                    !self.trusted_issuers.is_empty() || self.static_jwks.is_some(),
+                    "JWKS URL must be set for ValidationConfig (or static_jwks / at least one trusted_issuer)"
                 );
                 String::new()
             }
@@ -741,6 +780,7 @@ impl ValidationConfigBuilder {
             require_dpop: self.require_dpop,
             dpop_resource_origin: self.dpop_resource_origin,
             trusted_issuers: self.trusted_issuers,
+            static_jwks: self.static_jwks,
         }
     }
 }
@@ -754,6 +794,8 @@ pub struct JwtStrategy<I> {
     require_dpop: bool,
     dpop_resource_origin: Option<String>,
     dpop_replay_store: Arc<dyn crate::dpop::DpopReplayStore>,
+    dpop_nonces: Option<authkestra_engine::token::dpop_nonce::DpopNonces>,
+    step_up: Option<crate::StepUpRequirement>,
     _marker: std::marker::PhantomData<I>,
 }
 
@@ -775,6 +817,8 @@ impl<I> JwtStrategy<I> {
             require_dpop: config.require_dpop,
             dpop_resource_origin: config.dpop_resource_origin,
             dpop_replay_store: Arc::new(crate::dpop::NoDpopReplayStore),
+            dpop_nonces: None,
+            step_up: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -799,6 +843,8 @@ impl<I> JwtStrategy<I> {
             require_dpop: config.require_dpop,
             dpop_resource_origin: config.dpop_resource_origin,
             dpop_replay_store: Arc::new(crate::dpop::NoDpopReplayStore),
+            dpop_nonces: None,
+            step_up: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -812,6 +858,33 @@ impl<I> JwtStrategy<I> {
     /// deployment that calls this but not `require_dpop` sees no effect.
     pub fn with_dpop_replay_store(mut self, store: Arc<dyn crate::dpop::DpopReplayStore>) -> Self {
         self.dpop_replay_store = store;
+        self
+    }
+
+    /// Supplies the stateless [`authkestra_engine::token::dpop_nonce::DpopNonces`]
+    /// issuer/verifier for RFC 9449 §9 resource-server `DPoP-Nonce` challenges.
+    ///
+    /// When configured alongside [`ValidationConfig::require_dpop`], every DPoP
+    /// proof must carry a current server-issued `nonce` claim; proofs without
+    /// one (or with an expired one) are refused with `error="use_dpop_nonce"`
+    /// and a fresh `DPoP-Nonce` response header.
+    pub fn with_dpop_nonces(
+        mut self,
+        nonces: authkestra_engine::token::dpop_nonce::DpopNonces,
+    ) -> Self {
+        self.dpop_nonces = Some(nonces);
+        self
+    }
+
+    /// Configures an RFC 9470 Step-Up Authentication Challenge requirement
+    /// (`acr_values` and/or `max_age`) for this strategy.
+    ///
+    /// Tokens whose `acr` or `auth_time` claims do not satisfy `requirement`
+    /// are refused with `error="insufficient_user_authentication"` on the
+    /// `WWW-Authenticate` response header (`authenticate_with_refusal`) or
+    /// declined (`authenticate`).
+    pub fn with_step_up(mut self, requirement: crate::StepUpRequirement) -> Self {
+        self.step_up = Some(requirement);
         self
     }
 }
@@ -828,9 +901,16 @@ fn build_resolver(config: &ValidationConfig) -> Box<dyn JwksResolver> {
                 .require_kid(config.require_kid),
         )
     };
+    let single_cache = || {
+        if let Some(jwks) = &config.static_jwks {
+            Arc::new(JwksCache::from_static(jwks.clone()).require_kid(config.require_kid))
+        } else {
+            cache_for(&config.jwks_url)
+        }
+    };
 
     if config.trusted_issuers.is_empty() {
-        return Box::new(SingleJwksResolver::new(cache_for(&config.jwks_url)));
+        return Box::new(SingleJwksResolver::new(single_cache()));
     }
 
     let mut caches: BTreeMap<String, Arc<JwksCache>> = config
@@ -844,13 +924,12 @@ fn build_resolver(config: &ValidationConfig) -> Box<dyn JwksResolver> {
     // parallel mechanism. Without an `issuer` to name it, a `jwks_url` cannot be
     // folded in at all: using it as a default arm is exactly the issuer confusion
     // the trust map exists to prevent, so it is dropped loudly instead.
+    let has_single_key_source = !config.jwks_url.is_empty() || config.static_jwks.is_some();
     match &config.issuer {
-        Some(issuer) if !config.jwks_url.is_empty() => {
-            caches
-                .entry(issuer.clone())
-                .or_insert_with(|| cache_for(&config.jwks_url));
+        Some(issuer) if has_single_key_source => {
+            caches.entry(issuer.clone()).or_insert_with(single_cache);
         }
-        None if !config.jwks_url.is_empty() => {
+        None if has_single_key_source => {
             tracing::warn!(
                 jwks_url = %config.jwks_url,
                 "ignoring jwks_url: with a trusted_issuers map configured and no issuer naming it, \
@@ -877,19 +956,16 @@ fn build_validation(config: &ValidationConfig, multi_issuer: bool) -> Validation
     // way to express more than one name. Every trusted issuer goes in, so a
     // token verified with issuer B's key still has to *say* it came from B.
     let mut accepted_issuers: Vec<&String> = config.trusted_issuers.keys().collect();
-    // The `!jwks_url.is_empty()` condition mirrors `build_resolver` exactly. Both
-    // must agree on whether `config.issuer` is a resolvable issuer: `build_resolver`
-    // folds it into the trust map only when there is a `jwks_url` for it, so adding
-    // it here unconditionally would leave `Validation` accepting a name the resolver
-    // can never resolve. That is fail-closed (the resolver errors first), but a
-    // backstop widened past the thing it backstops is not one you want to keep —
-    // and the same `Validation` is handed to third-party resolvers. Raised in
-    // review of #243.
+    // The `!jwks_url.is_empty() || static_jwks.is_some()` condition mirrors
+    // `build_resolver` exactly. Both must agree on whether `config.issuer` is a
+    // resolvable issuer: `build_resolver` folds it into the trust map only when
+    // there is a key source for it, so adding it here unconditionally would
+    // leave `Validation` accepting a name the resolver can never resolve.
     if let Some(issuer) = config
         .issuer
         .as_ref()
         .filter(|issuer| !config.trusted_issuers.contains_key(*issuer))
-        .filter(|_| !config.jwks_url.is_empty())
+        .filter(|_| !config.jwks_url.is_empty() || config.static_jwks.is_some())
     {
         accepted_issuers.push(issuer);
     }
@@ -913,19 +989,40 @@ fn build_validation(config: &ValidationConfig, multi_issuer: bool) -> Validation
     validation
 }
 
-#[async_trait]
-impl<I> AuthenticationStrategy<I> for JwtStrategy<I>
+enum InnerAuthOutcome {
+    Declined(Box<crate::ResourceRefusal>),
+    HardError {
+        message: String,
+        refusal: Box<crate::ResourceRefusal>,
+    },
+}
+
+impl<I> JwtStrategy<I>
 where
     I: for<'de> Deserialize<'de> + Send + Sync + 'static,
 {
-    // `skip_all`: `parts` carries the `Authorization` header, and a derived
-    // span field would print the bearer token. The span exists so the dozen
-    // rejection events in this function can be correlated to one request,
-    // which is what having none of them under a span cost (#353).
+    /// Authenticates `parts` and returns a structured [`crate::ResourceRefusal`]
+    /// (`WWW-Authenticate`, `DPoP-Nonce`, RFC 9470 step-up parameters) when a
+    /// presented token or proof is rejected.
     #[tracing::instrument(skip_all, name = "jwt_authenticate")]
-    async fn authenticate(&self, parts: &Parts) -> Result<Option<I>, AuthError> {
+    pub async fn authenticate_with_refusal(
+        &self,
+        parts: &Parts,
+    ) -> Result<Option<I>, crate::ResourceRefusal> {
+        match self.authenticate_inner(parts).await {
+            Ok(identity) => Ok(identity),
+            Err(InnerAuthOutcome::Declined(refusal)) => Err(*refusal),
+            Err(InnerAuthOutcome::HardError { refusal, .. }) => Err(*refusal),
+        }
+    }
+
+    async fn authenticate_inner(&self, parts: &Parts) -> Result<Option<I>, InnerAuthOutcome> {
         if let Some(presented) = extract_presented_token(&parts.headers) {
             let token = presented.token();
+            let scheme = match presented {
+                PresentedToken::Bearer(_) => crate::AuthScheme::Bearer,
+                PresentedToken::DPoP(_) => crate::AuthScheme::DPoP,
+            };
             // Resolve once and reuse the same cache below: which JWKS applies is
             // a property of the token, so re-resolving for the `cnf` re-decode
             // could only introduce a discrepancy.
@@ -938,29 +1035,36 @@ where
                     | ValidationError::MissingIssuer),
                 ) => {
                     tracing::debug!(error = %e, "could not read or trust the token's issuer; no identity");
-                    return Ok(None);
+                    return Err(InnerAuthOutcome::Declined(Box::new(
+                        crate::ResourceRefusal::invalid_token(
+                            scheme,
+                            "The access token issuer is invalid or untrusted",
+                        ),
+                    )));
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "could not resolve a JWKS for the token's issuer; rejecting token");
-                    return Err(AuthError::Token(e.to_string()));
+                    let msg = e.to_string();
+                    return Err(InnerAuthOutcome::HardError {
+                        message: msg.clone(),
+                        refusal: Box::new(crate::ResourceRefusal::internal_error(msg)),
+                    });
                 }
             };
 
             match validate_jwt_generic::<I>(token, &cache, &self.validation).await {
                 Ok(claims) => {
-                    if self.require_cert_binding || self.require_dpop {
-                        // Re-decode as `CnfClaim` to read `cnf` regardless of
-                        // what identity type `I` the caller asked for — `I`
-                        // is not required to expose `cnf` itself, so this
-                        // can't be read off of `claims` above. The token was
-                        // already fully verified by the decode above; this
-                        // second decode reuses the same cache/validation and
-                        // cannot itself fail differently, short of key
-                        // rotation racing between the two calls, which is
-                        // treated the same as any other verification
-                        // failure: reject. Shared between both checks below
-                        // since a token can carry both `cnf.x5t#S256` and
-                        // `cnf.jkt` at once (RFC 9449 §6.1).
+                    if self.require_cert_binding || self.require_dpop || self.step_up.is_some() {
+                        // Re-decode as `CnfClaim` to read `cnf`, `acr`, and
+                        // `auth_time` regardless of what identity type `I` the
+                        // caller asked for — `I` is not required to expose
+                        // those fields itself, so they can't be read off of
+                        // `claims` above. The token was already fully verified
+                        // by the decode above; this second decode reuses the
+                        // same cache/validation and cannot itself fail
+                        // differently, short of key rotation racing between
+                        // the two calls, which is treated the same as any
+                        // other verification failure: reject.
                         let cnf_claim = match validate_jwt_generic::<CnfClaim>(
                             token,
                             &cache,
@@ -971,7 +1075,12 @@ where
                             Ok(c) => c,
                             Err(e) => {
                                 tracing::warn!(error = %e, "failed to re-decode token while checking cnf-based binding");
-                                return Ok(None);
+                                return Err(InnerAuthOutcome::Declined(Box::new(
+                                    crate::ResourceRefusal::invalid_token(
+                                        scheme,
+                                        "The access token is invalid",
+                                    ),
+                                )));
                             }
                         };
 
@@ -983,7 +1092,12 @@ where
 
                             if let Err(e) = verify_cert_binding(cert_der, cnf_claim.cnf.as_ref()) {
                                 tracing::warn!(error = %e, "RFC 8705 certificate-binding check failed; rejecting token");
-                                return Ok(None);
+                                return Err(InnerAuthOutcome::Declined(Box::new(
+                                    crate::ResourceRefusal::invalid_token(
+                                        scheme,
+                                        "Client certificate binding verification failed",
+                                    ),
+                                )));
                             }
                         }
 
@@ -1012,14 +1126,24 @@ where
                                         "token is DPoP-bound (cnf.jkt) but was presented via \
                                          the Bearer scheme, not DPoP; rejecting"
                                     );
-                                    return Ok(None);
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
+                                        crate::ResourceRefusal::invalid_token(
+                                            crate::AuthScheme::DPoP,
+                                            "DPoP-bound token must be presented using the DPoP authentication scheme",
+                                        ),
+                                    )));
                                 }
                                 (PresentedToken::DPoP(_), false) => {
                                     tracing::warn!(
                                         "request used the DPoP auth-scheme but the token \
                                          carries no cnf.jkt confirmation claim; rejecting"
                                     );
-                                    return Ok(None);
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
+                                        crate::ResourceRefusal::invalid_token(
+                                            crate::AuthScheme::DPoP,
+                                            "Token presented with DPoP scheme is not DPoP-bound",
+                                        ),
+                                    )));
                                 }
                                 _ => {}
                             }
@@ -1028,7 +1152,11 @@ where
                                 Ok(h) => h,
                                 Err(e) => {
                                     tracing::warn!(error = %e, "malformed DPoP header; rejecting token");
-                                    return Ok(None);
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
+                                        crate::ResourceRefusal::invalid_dpop_proof(
+                                            "Malformed DPoP header",
+                                        ),
+                                    )));
                                 }
                             };
 
@@ -1037,24 +1165,37 @@ where
                                 .as_deref()
                                 .map(|origin| format!("{origin}{}", parts.uri.path()));
 
-                            match verify_dpop_binding(
+                            match verify_dpop_binding_with_nonces(
                                 dpop_header,
                                 parts.method.as_str(),
                                 htu.as_deref(),
                                 token,
                                 cnf_claim.cnf.as_ref(),
                                 self.dpop_replay_store.as_ref(),
+                                self.dpop_nonces.as_ref(),
                             )
                             .await
                             {
                                 Ok(()) => {}
+                                Err(ValidationError::UseDpopNonce { fresh_nonce }) => {
+                                    tracing::info!(
+                                        "DPoP proof lacks a current server nonce; challenging with use_dpop_nonce"
+                                    );
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
+                                        crate::ResourceRefusal::use_dpop_nonce(fresh_nonce),
+                                    )));
+                                }
                                 // The credential itself is bad (missing/malformed
                                 // proof, wrong key, wrong ath, already-used jti,
                                 // wrong method) — decline this strategy, same as
                                 // every other "invalid token" outcome above.
                                 Err(e @ ValidationError::InvalidToken(_)) => {
                                     tracing::warn!(error = %e, "RFC 9449 DPoP binding check failed; rejecting token");
-                                    return Ok(None);
+                                    return Err(InnerAuthOutcome::Declined(Box::new(
+                                        crate::ResourceRefusal::invalid_dpop_proof(
+                                            "The presented DPoP proof is invalid",
+                                        ),
+                                    )));
                                 }
                                 // Replay protection could not be *checked* at
                                 // all (store errored, or none is configured) —
@@ -1070,8 +1211,24 @@ where
                                 // handled, for the identical reason.
                                 Err(e) => {
                                     tracing::warn!(error = %e, "could not verify DPoP replay protection; rejecting request");
-                                    return Err(AuthError::Token(e.to_string()));
+                                    let msg = e.to_string();
+                                    return Err(InnerAuthOutcome::HardError {
+                                        message: msg.clone(),
+                                        refusal: Box::new(crate::ResourceRefusal::internal_error(
+                                            msg,
+                                        )),
+                                    });
                                 }
+                            }
+                        }
+
+                        if let Some(step_up) = &self.step_up {
+                            if let Err(refusal) = step_up.check_values(
+                                cnf_claim.acr.as_deref(),
+                                cnf_claim.auth_time,
+                                scheme,
+                            ) {
+                                return Err(InnerAuthOutcome::Declined(Box::new(refusal)));
                             }
                         }
                     }
@@ -1087,7 +1244,12 @@ where
                 // above: under a first-success policy a decline is ordinary.
                 Err(e @ (ValidationError::InvalidToken(_) | ValidationError::Jwt(_))) => {
                     tracing::debug!(error = %e, "token failed validation; no identity");
-                    Ok(None)
+                    Err(InnerAuthOutcome::Declined(Box::new(
+                        crate::ResourceRefusal::invalid_token(
+                            scheme,
+                            "The access token is invalid or expired",
+                        ),
+                    )))
                 }
                 // Everything else — a JWKS that could not be fetched, a key
                 // that could not be found, replay protection that could not
@@ -1095,7 +1257,11 @@ where
                 // not tell", and is propagated as a hard error.
                 Err(e) => {
                     tracing::warn!(error = %e, "could not determine whether the token is valid");
-                    Err(AuthError::Token(e.to_string()))
+                    let msg = e.to_string();
+                    Err(InnerAuthOutcome::HardError {
+                        message: msg.clone(),
+                        refusal: Box::new(crate::ResourceRefusal::internal_error(msg)),
+                    })
                 }
             }
         } else {
@@ -1104,14 +1270,44 @@ where
     }
 }
 
-/// The subset of a token's claims this crate needs to check RFC 8705
-/// certificate binding — just the `cnf` confirmation claim, decoded
+#[async_trait]
+impl<I> AuthenticationStrategy<I> for JwtStrategy<I>
+where
+    I: for<'de> Deserialize<'de> + Send + Sync + 'static,
+{
+    // `skip_all`: `parts` carries the `Authorization` header, and a derived
+    // span field would print the bearer token. The span exists so the dozen
+    // rejection events in this function can be correlated to one request,
+    // which is what having none of them under a span cost (#353).
+    #[tracing::instrument(skip_all, name = "jwt_authenticate")]
+    async fn authenticate(&self, parts: &Parts) -> Result<Option<I>, AuthError> {
+        match self.authenticate_inner(parts).await {
+            Ok(identity) => Ok(identity),
+            Err(InnerAuthOutcome::Declined(_)) => Ok(None),
+            Err(InnerAuthOutcome::HardError { message, .. }) => Err(AuthError::Token(message)),
+        }
+    }
+
+    async fn authenticate_with_refusal(
+        &self,
+        parts: &Parts,
+    ) -> Result<Option<I>, crate::ResourceRefusal> {
+        JwtStrategy::authenticate_with_refusal(self, parts).await
+    }
+}
+
+/// The subset of a token's claims this crate needs to check RFC 8705 / RFC 9449
+/// `cnf` binding and RFC 9470 step-up (`acr` / `auth_time`), decoded
 /// independently of whatever identity type `I` a `JwtStrategy<I>` caller
 /// asked for.
 #[derive(Debug, Deserialize)]
 struct CnfClaim {
     #[serde(default)]
     cnf: Option<serde_json::Value>,
+    #[serde(default)]
+    acr: Option<String>,
+    #[serde(default)]
+    auth_time: Option<i64>,
 }
 
 /// Verifies RFC 8705 §3.1 certificate binding for a decoded token's `cnf`
@@ -1274,6 +1470,22 @@ pub async fn verify_dpop_binding(
     cnf: Option<&serde_json::Value>,
     replay_store: &dyn crate::dpop::DpopReplayStore,
 ) -> Result<(), ValidationError> {
+    verify_dpop_binding_with_nonces(dpop_header, htm, htu, access_token, cnf, replay_store, None)
+        .await
+}
+
+/// Verifies RFC 9449 DPoP key binding and, when `dpop_nonces` is provided,
+/// RFC 9449 §9 resource-server `DPoP-Nonce` freshness before recording the
+/// proof's `jti` in `replay_store`.
+pub async fn verify_dpop_binding_with_nonces(
+    dpop_header: Option<&str>,
+    htm: &str,
+    htu: Option<&str>,
+    access_token: &str,
+    cnf: Option<&serde_json::Value>,
+    replay_store: &dyn crate::dpop::DpopReplayStore,
+    dpop_nonces: Option<&authkestra_engine::token::dpop_nonce::DpopNonces>,
+) -> Result<(), ValidationError> {
     let Some(expected_jkt) = dpop_bound_jkt(cnf) else {
         return Ok(());
     };
@@ -1298,6 +1510,24 @@ pub async fn verify_dpop_binding(
         return Err(ValidationError::InvalidToken(
             "DPoP proof key does not match the token's cnf.jkt".to_string(),
         ));
+    }
+
+    // RFC 9449 §9: checked after signature, `ath`, and `cnf.jkt` verification
+    // (so the payload claim read here is signature-covered and key-bound) and
+    // before `check_and_record_dpop_jti` (so a `use_dpop_nonce` challenge does
+    // not burn the proof's `jti`).
+    if let Some(nonces) = dpop_nonces {
+        let presented = authkestra_engine::token::dpop_nonce::dpop_proof_nonce(proof);
+        let accepted = presented.as_deref().is_some_and(|n| nonces.accepts(n));
+        if !accepted {
+            tracing::debug!(
+                had_nonce = presented.is_some(),
+                "DPoP proof rejected by server nonce verifier; issuing fresh nonce challenge"
+            );
+            return Err(ValidationError::UseDpopNonce {
+                fresh_nonce: nonces.issue(),
+            });
+        }
     }
 
     // Anchored to the proof's own `iat`, not the current time — see the
@@ -1715,6 +1945,7 @@ mod tests {
             signing_key: SigningKey,
             jti: String,
             ath: Option<String>,
+            nonce: Option<String>,
         }
 
         impl DpopProofBuilder {
@@ -1723,11 +1954,17 @@ mod tests {
                     signing_key: SigningKey::from_bytes(&[seed; 32]),
                     jti: jti.to_string(),
                     ath: None,
+                    nonce: None,
                 }
             }
 
             fn with_ath(mut self, ath: &str) -> Self {
                 self.ath = Some(ath.to_string());
+                self
+            }
+
+            fn with_nonce(mut self, nonce: &str) -> Self {
+                self.nonce = Some(nonce.to_string());
                 self
             }
 
@@ -1760,6 +1997,9 @@ mod tests {
                 });
                 if let Some(ath) = &self.ath {
                     payload["ath"] = serde_json::Value::String(ath.clone());
+                }
+                if let Some(nonce) = &self.nonce {
+                    payload["nonce"] = serde_json::Value::String(nonce.clone());
                 }
                 let signing_input = format!("{}.{}", b64_json(&header), b64_json(&payload));
                 let signature = self.signing_key.sign(signing_input.as_bytes());
@@ -1931,6 +2171,54 @@ mod tests {
             .await
             .expect_err("a proof signed for a different HTTP method must be refused");
             assert!(matches!(err, ValidationError::InvalidToken(_)));
+        }
+
+        #[tokio::test]
+        async fn dpop_nonces_challenge_missing_nonce_without_burning_jti_and_accept_fresh_nonce() {
+            let store = MemoryStore::<DpopJtiRecord>::new();
+            let nonces = authkestra_engine::token::dpop_nonce::DpopNonces::new(
+                b"resource-server-secret-32-bytes!",
+                Duration::from_secs(300),
+            );
+            let access_token = "the-access-token-string";
+            let ath = x5t_s256_thumbprint(access_token.as_bytes());
+
+            let without_nonce = DpopProofBuilder::with_key_seed(11, "jti-nonce-1").with_ath(&ath);
+            let cnf = cnf_with_jkt(&without_nonce.expected_jkt());
+
+            // 1. Missing nonce challenges with UseDpopNonce and does NOT burn jti-nonce-1.
+            let err = verify_dpop_binding_with_nonces(
+                Some(&without_nonce.build()),
+                "GET",
+                None,
+                access_token,
+                Some(&cnf),
+                &store,
+                Some(&nonces),
+            )
+            .await
+            .expect_err("proof without nonce must be challenged when nonces are configured");
+            let fresh_nonce = match err {
+                ValidationError::UseDpopNonce { fresh_nonce } => fresh_nonce,
+                other => panic!("expected UseDpopNonce, got {other:?}"),
+            };
+            assert!(nonces.accepts(&fresh_nonce));
+
+            // 2. Retrying with the fresh nonce (and even the same jti, proving the challenge did not burn it) succeeds.
+            let with_nonce = DpopProofBuilder::with_key_seed(11, "jti-nonce-1")
+                .with_ath(&ath)
+                .with_nonce(&fresh_nonce);
+            verify_dpop_binding_with_nonces(
+                Some(&with_nonce.build()),
+                "GET",
+                None,
+                access_token,
+                Some(&cnf),
+                &store,
+                Some(&nonces),
+            )
+            .await
+            .expect("proof carrying a current server nonce must be accepted");
         }
     }
 

@@ -81,6 +81,10 @@ ignore = [
                          # elliptic-curve 0.13.8; fixed in crypto-bigint 0.7.6+
                          # which has no stable elliptic-curve 0.14 release yet.
     "RUSTSEC-2026-0440", # astral-tokio-tar unmaintained notice, via testcontainers 0.27.3
+    "RUSTSEC-2026-0459", # libsqlite3-sys 0.30.1 local crafted -wal page-size mismatch
+                         # (CVE-2026-119375), pinned transitively by sqlx-sqlite 0.8.6
+                         # (latest stable); fixed in libsqlite3-sys 0.39.0+, remove once
+                         # sqlx bumps its libsqlite3-sys constraint.
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.

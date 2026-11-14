@@ -16,6 +16,31 @@ pub trait AuthenticationStrategy<I>: Send + Sync {
     /// - `Ok(None)` if the strategy did not find relevant credentials (e.g., missing header).
     /// - `Err(AuthError)` if authentication failed (e.g., invalid token, DB error).
     async fn authenticate(&self, parts: &Parts) -> Result<Option<I>, AuthError>;
+
+    /// Attempt to authenticate the request, returning a structured
+    /// [`ResourceRefusal`](crate::token::refusal::ResourceRefusal) when
+    /// presented credentials are rejected (e.g. RFC 6750 `invalid_token`,
+    /// RFC 9449 `invalid_dpop_proof` / `use_dpop_nonce` with `DPoP-Nonce`, or
+    /// RFC 9470 `insufficient_user_authentication` with `acr_values` / `max_age`).
+    ///
+    /// The default implementation delegates to [`Self::authenticate`].
+    async fn authenticate_with_refusal(
+        &self,
+        parts: &Parts,
+    ) -> Result<Option<I>, crate::token::refusal::ResourceRefusal> {
+        match self.authenticate(parts).await {
+            Ok(opt) => Ok(opt),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "strategy returned error during default authenticate_with_refusal conversion"
+                );
+                Err(crate::token::refusal::ResourceRefusal::internal_error(
+                    e.to_string(),
+                ))
+            }
+        }
+    }
 }
 
 /// Reports a strategy's outcome, so the three cases a caller collapses stay

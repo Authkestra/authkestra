@@ -284,6 +284,78 @@ pub fn amr_acr_extra_claims(identity: &Identity) -> HashMap<String, serde_json::
     extra
 }
 
+/// Builds the full `extra` claims map for an issued ID token, combining
+/// [`amr_acr_extra_claims`] (`auth_time`, `acr`, `amr` from `raw_identity`)
+/// with the standard OIDC Core §5.1 top-level profile and email claims
+/// (`email`, `email_verified`, `name`, `preferred_username`) survived on
+/// `sanitized_identity` after
+/// [`sanitize_identity_for_scopes`](authkestra_engine::token::sanitize_identity_for_scopes).
+///
+/// Relying parties reading top-level OIDC claims (rather than Authkestra's
+/// nested `identity` object) see the same scope-gated `email`,
+/// `email_verified`, `name`, and `preferred_username` claims on the ID token
+/// that `/userinfo` returns (issue #445).
+pub fn id_token_extra_claims(
+    raw_identity: &Identity,
+    sanitized_identity: &Identity,
+) -> HashMap<String, serde_json::Value> {
+    let mut extra = amr_acr_extra_claims(raw_identity);
+
+    if let Some(email) = sanitized_identity
+        .email
+        .as_ref()
+        .or_else(|| sanitized_identity.attributes.get("email"))
+        .filter(|s| !s.is_empty())
+    {
+        extra.insert(
+            "email".to_string(),
+            serde_json::Value::String(email.clone()),
+        );
+    }
+
+    if let Some(verified) = sanitized_identity
+        .attributes
+        .get("email_verified")
+        .and_then(|raw| raw.parse::<bool>().ok())
+    {
+        extra.insert(
+            "email_verified".to_string(),
+            serde_json::Value::Bool(verified),
+        );
+    }
+
+    if let Some(name) = sanitized_identity
+        .attributes
+        .get("name")
+        .or(sanitized_identity.username.as_ref())
+        .filter(|s| !s.is_empty())
+    {
+        extra.insert("name".to_string(), serde_json::Value::String(name.clone()));
+    }
+
+    if let Some(preferred_username) = sanitized_identity
+        .attributes
+        .get("preferred_username")
+        .or(sanitized_identity.username.as_ref())
+        .filter(|s| !s.is_empty())
+    {
+        extra.insert(
+            "preferred_username".to_string(),
+            serde_json::Value::String(preferred_username.clone()),
+        );
+    }
+
+    tracing::debug!(
+        has_email = extra.contains_key("email"),
+        has_email_verified = extra.contains_key("email_verified"),
+        has_name = extra.contains_key("name"),
+        has_preferred_username = extra.contains_key("preferred_username"),
+        "selected top-level OIDC claims for ID token"
+    );
+
+    extra
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

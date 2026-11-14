@@ -7,6 +7,7 @@ use std::collections::HashMap;
 pub mod cert_binding;
 pub mod dpop;
 pub mod dpop_nonce;
+pub mod refusal;
 pub mod sd_jwt;
 
 /// The `aud` (audience) claim, per RFC 7519 §4.1.3: either a single

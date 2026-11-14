@@ -202,12 +202,7 @@ async fn verify_inner(
         }
     }
 
-    Ok(DeviceIdentity::new(
-        att.sub,
-        att.did,
-        sig.jwk_thumbprint,
-        att.att,
-    ))
+    Ok(DeviceIdentity::new(att.sub, att.did, sig.jwk_thumbprint, att.att).with_signed_at(sig.iat))
 }
 
 /// Returns `Some(value)` if the optional string slice is present and non-empty.

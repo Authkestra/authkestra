@@ -568,6 +568,9 @@ fn provider_for_display(provider: &str) -> String {
 #[non_exhaustive]
 pub enum AxumError {
     Unauthorized(String),
+    /// A structured RFC 6750 / RFC 9449 / RFC 9470 resource-server refusal
+    /// carrying `WWW-Authenticate` and optional `DPoP-Nonce` challenge headers.
+    ResourceRefusal(authkestra_engine::token::refusal::ResourceRefusal),
     /// The caller asked for something that does not exist — an unregistered
     /// OAuth provider, say. A client error, not a server fault.
     NotFound(String),
@@ -580,6 +583,7 @@ impl std::fmt::Display for AxumError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AxumError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
+            AxumError::ResourceRefusal(refusal) => write!(f, "Unauthorized: {}", refusal.error),
             AxumError::NotFound(msg) => write!(f, "Not Found: {}", msg),
             AxumError::Internal(msg) => write!(f, "Internal Error: {}", msg),
             AxumError::ComponentMissing(msg) => write!(f, "Component Missing: {}", msg),
@@ -587,10 +591,85 @@ impl std::fmt::Display for AxumError {
     }
 }
 
+/// Converts a [`authkestra_engine::token::refusal::ResourceRefusal`] into an
+/// Axum HTTP response with `WWW-Authenticate`, optional `DPoP-Nonce`,
+/// `Cache-Control: no-store`, and JSON error body.
+pub fn resource_refusal_response(
+    refusal: &authkestra_engine::token::refusal::ResourceRefusal,
+) -> axum::response::Response {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::UNAUTHORIZED);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    if let Some(www_auth) = refusal.www_authenticate() {
+        if let Ok(val) = axum::http::HeaderValue::from_str(&www_auth) {
+            headers.insert(axum::http::header::WWW_AUTHENTICATE, val);
+        }
+    }
+    if let Some(nonce) = &refusal.dpop_nonce {
+        if let Ok(val) = axum::http::HeaderValue::from_str(nonce) {
+            headers.insert(axum::http::HeaderName::from_static("dpop-nonce"), val);
+        }
+    }
+    let body = if refusal.status >= 500 {
+        let mut redacted = refusal.clone();
+        redacted.error_description = Some("An internal authentication error occurred.".to_string());
+        redacted.body()
+    } else {
+        refusal.body()
+    };
+    (status, headers, body).into_response()
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::resource_refusal_response;
+    use authkestra_engine::token::refusal::{AuthScheme, ResourceRefusal};
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn resource_refusal_response_preserves_503_and_redacts_server_error_descriptions() {
+        let unavail =
+            ResourceRefusal::temporarily_unavailable(AuthScheme::Bearer, "jwks endpoint timed out");
+        let resp = resource_refusal_response(&unavail);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "temporarily_unavailable");
+        assert_eq!(
+            json["error_description"],
+            "An internal authentication error occurred."
+        );
+
+        let challenge = ResourceRefusal::invalid_token(AuthScheme::Bearer, "expired token");
+        let resp_401 = resource_refusal_response(&challenge);
+        assert_eq!(resp_401.status(), StatusCode::UNAUTHORIZED);
+        let body_401 = axum::body::to_bytes(resp_401.into_body(), 4096)
+            .await
+            .unwrap();
+        let json_401: serde_json::Value = serde_json::from_slice(&body_401).unwrap();
+        assert_eq!(json_401["error_description"], "expired token");
+    }
+}
+
 impl IntoResponse for AxumError {
     fn into_response(self) -> axum::response::Response {
+        if let AxumError::ResourceRefusal(refusal) = self {
+            return resource_refusal_response(&refusal);
+        }
         let (status, message) = match self {
             AxumError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AxumError::ResourceRefusal(_) => unreachable!("handled above"),
             AxumError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AxumError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AxumError::ComponentMissing(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),

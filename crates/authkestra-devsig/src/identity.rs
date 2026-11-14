@@ -21,6 +21,9 @@ pub struct DeviceIdentity {
     /// The attestation's `att` claim — application attributes. Opaque to this crate; surfaced
     /// as-is to the application.
     pub attributes: Value,
+    /// The request signature's `iat` claim (Unix epoch seconds), when verified by
+    /// [`verify()`](crate::verify()) or set via [`Self::with_signed_at`].
+    pub signed_at: Option<i64>,
 }
 
 impl DeviceIdentity {
@@ -59,7 +62,19 @@ impl DeviceIdentity {
             device,
             key_thumbprint,
             attributes,
+            signed_at: None,
         }
+    }
+
+    /// Attaches the request signature's `iat` timestamp (Unix epoch seconds) to this identity.
+    pub fn with_signed_at(mut self, signed_at: i64) -> Self {
+        self.signed_at = Some(signed_at);
+        self
+    }
+
+    /// Returns the request signature's `iat` timestamp (Unix epoch seconds), if present.
+    pub fn signed_at(&self) -> Option<i64> {
+        self.signed_at
     }
 
     /// Which of the device's keys signed this request: the attestation's `att.role` under

@@ -426,7 +426,7 @@ where
                 }
             }
 
-            match guard.authenticate(&parts).await {
+            match guard.authenticate_with_refusal(&parts).await {
                 Ok(Some(identity)) => {
                     tracing::info!("successfully authenticated request via Guard");
                     Ok(Auth(identity))
@@ -435,12 +435,110 @@ where
                     tracing::warn!("authentication failed: no identity returned");
                     Err(actix_web::error::ErrorUnauthorized("Authentication failed"))
                 }
-                Err(e) => {
-                    tracing::error!(error = %e, "internal error during authentication");
-                    Err(actix_web::error::ErrorInternalServerError(e.to_string()))
+                Err(mut refusal) if refusal.status >= 500 => {
+                    let msg = refusal
+                        .error_description
+                        .as_deref()
+                        .unwrap_or(&refusal.error);
+                    tracing::error!(
+                        status = refusal.status,
+                        error = %msg,
+                        "internal error during authentication"
+                    );
+                    refusal.error_description =
+                        Some("An internal authentication error occurred.".to_string());
+                    Err(actix_web::Error::from(ResourceRefusalActixError(refusal)))
+                }
+                Err(refusal) => {
+                    tracing::warn!(error = %refusal.error, "authentication refused with challenge");
+                    Err(actix_web::Error::from(ResourceRefusalActixError(refusal)))
                 }
             }
         })
+    }
+}
+
+/// Converts a [`authkestra_engine::token::refusal::ResourceRefusal`] into an
+/// Actix HTTP response with `WWW-Authenticate`, optional `DPoP-Nonce`,
+/// `Cache-Control: no-store`, and JSON error body.
+pub fn resource_refusal_response(
+    refusal: &authkestra_engine::token::refusal::ResourceRefusal,
+) -> actix_web::HttpResponse {
+    let status = actix_web::http::StatusCode::from_u16(refusal.status)
+        .unwrap_or(actix_web::http::StatusCode::UNAUTHORIZED);
+    let mut resp = actix_web::HttpResponse::build(status);
+    resp.insert_header((actix_web::http::header::CONTENT_TYPE, "application/json"));
+    resp.insert_header((actix_web::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"));
+    resp.insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"));
+    if let Some(www_auth) = refusal.www_authenticate() {
+        resp.insert_header((actix_web::http::header::WWW_AUTHENTICATE, www_auth));
+    }
+    if let Some(nonce) = &refusal.dpop_nonce {
+        resp.insert_header((
+            authkestra_engine::token::dpop_nonce::DPOP_NONCE_HEADER,
+            nonce.as_str(),
+        ));
+    }
+    let body = if refusal.status >= 500 {
+        let mut redacted = refusal.clone();
+        redacted.error_description = Some("An internal authentication error occurred.".to_string());
+        redacted.body()
+    } else {
+        refusal.body()
+    };
+    resp.body(body)
+}
+
+#[cfg(feature = "resource")]
+#[derive(Debug)]
+struct ResourceRefusalActixError(authkestra_engine::token::refusal::ResourceRefusal);
+
+#[cfg(feature = "resource")]
+impl std::fmt::Display for ResourceRefusalActixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unauthorized: {}", self.0.error)
+    }
+}
+
+#[cfg(feature = "resource")]
+impl actix_web::ResponseError for ResourceRefusalActixError {
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        actix_web::http::StatusCode::from_u16(self.0.status)
+            .unwrap_or(actix_web::http::StatusCode::UNAUTHORIZED)
+    }
+
+    fn error_response(&self) -> actix_web::HttpResponse {
+        resource_refusal_response(&self.0)
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::resource_refusal_response;
+    use actix_web::body::to_bytes;
+    use actix_web::http::StatusCode;
+    use authkestra_engine::token::refusal::{AuthScheme, ResourceRefusal};
+
+    #[actix_web::test]
+    async fn resource_refusal_response_preserves_503_and_redacts_server_error_descriptions() {
+        let unavail =
+            ResourceRefusal::temporarily_unavailable(AuthScheme::Bearer, "jwks endpoint timed out");
+        let resp = resource_refusal_response(&unavail);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(resp.into_body()).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "temporarily_unavailable");
+        assert_eq!(
+            json["error_description"],
+            "An internal authentication error occurred."
+        );
+
+        let challenge = ResourceRefusal::invalid_token(AuthScheme::Bearer, "expired token");
+        let resp_401 = resource_refusal_response(&challenge);
+        assert_eq!(resp_401.status(), StatusCode::UNAUTHORIZED);
+        let body_401 = to_bytes(resp_401.into_body()).await.unwrap();
+        let json_401: serde_json::Value = serde_json::from_slice(&body_401).unwrap();
+        assert_eq!(json_401["error_description"], "expired token");
     }
 }
 

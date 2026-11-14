@@ -2695,6 +2695,88 @@ mod sqlite_tests {
             "a missing table must not be classified as a duplicate column: {err:?}"
         );
     }
+
+    /// Issue #446: `handle_device_code` records `last_polled_at` via
+    /// `update_device_code`, which on `SqlxOpStore` updates the row while it is
+    /// `Pending` (so the second immediate poll triggers `slow_down`) and
+    /// refuses to overwrite the row once it has transitioned to `Approved`.
+    #[tokio::test]
+    async fn test_sqlite_device_code_poll_updates_last_polled_at_without_overwriting_approval() {
+        use authkestra_op::device::DeviceCodeStatus;
+        let mut store = setup_db().await;
+
+        sqlx::query(
+            "INSERT INTO authkestra_oauth_clients
+             (client_id, client_secret_hash, require_pkce, redirect_uris, grant_types, scopes, allowed_audiences)
+             VALUES (?, NULL, ?, ?, ?, ?, ?)",
+        )
+        .bind("dev_client")
+        .bind(false)
+        .bind(sqlx::types::Json(Vec::<String>::new()))
+        .bind(sqlx::types::Json(vec![
+            "urn:ietf:params:oauth:grant-type:device_code",
+        ]))
+        .bind(sqlx::types::Json(vec!["openid"]))
+        .bind(sqlx::types::Json(Vec::<String>::new()))
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        let session = DeviceCodeSession::new(
+            "dev_sql_446".to_string(),
+            "USR446".to_string(),
+            "dev_client".to_string(),
+            "openid".to_string(),
+            Utc::now() + Duration::seconds(600),
+            DeviceCodeStatus::Pending,
+        );
+        store.store_device_code(session.clone()).await.unwrap();
+
+        let mut polled = session.clone();
+        let poll_ts = Utc::now();
+        polled.last_polled_at = Some(poll_ts);
+        store
+            .update_device_code(polled)
+            .await
+            .expect("updating a Pending device code's last_polled_at must succeed");
+
+        let after_poll = store
+            .get_device_code("dev_sql_446")
+            .await
+            .unwrap()
+            .expect("device code must exist");
+        assert!(
+            after_poll.last_polled_at.is_some(),
+            "SqlxOpStore must persist last_polled_at on Pending polls so slow_down fires"
+        );
+
+        let mut approved = after_poll.clone();
+        approved.status = DeviceCodeStatus::Approved(test_identity());
+        store
+            .update_device_code(approved)
+            .await
+            .expect("approving a Pending device code must succeed");
+
+        // A stale pending poll attempting to write `Pending` back must fail
+        // closed rather than reverting `Approved` to `Pending`.
+        let mut stale_pending = after_poll;
+        stale_pending.status = DeviceCodeStatus::Pending;
+        stale_pending.last_polled_at = Some(Utc::now());
+        assert!(
+            store.update_device_code(stale_pending).await.is_err(),
+            "a stale Pending poll must not overwrite an Approved device code"
+        );
+
+        let final_session = store
+            .get_device_code("dev_sql_446")
+            .await
+            .unwrap()
+            .expect("device code must still exist");
+        assert!(matches!(
+            final_session.status,
+            DeviceCodeStatus::Approved(_)
+        ));
+    }
 }
 
 #[cfg(all(test, feature = "mysql"))]

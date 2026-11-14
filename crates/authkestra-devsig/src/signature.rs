@@ -80,6 +80,9 @@ pub fn parse<'a>(
 #[non_exhaustive]
 pub struct VerifiedSignature {
     pub jti: String,
+    /// The verified request signature's `iat` claim as Unix epoch seconds,
+    /// not the server's verification time.
+    pub iat: i64,
     pub exp: i64,
     pub jwk_thumbprint: String,
 }
@@ -260,6 +263,7 @@ pub fn verify_bound_and_signed(
 
     Ok(VerifiedSignature {
         jti: claims.jti,
+        iat: claims.iat,
         exp: claims.exp,
         jwk_thumbprint: thumbprint,
     })

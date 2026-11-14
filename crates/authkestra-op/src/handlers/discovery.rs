@@ -44,6 +44,14 @@ pub struct OidcDiscovery {
     pub dpop_signing_alg_values_supported: Option<Vec<String>>,
     /// URL of the OP's OAuth 2.0 Token Endpoint.
     pub token_endpoint: String,
+    /// URL of the OP's OAuth 2.0 Device Authorization Endpoint (RFC 8628 §4).
+    ///
+    /// Populated from [`OpConfig::device_authorization_endpoint`] when
+    /// `grant_types_supported` includes
+    /// `"urn:ietf:params:oauth:grant-type:device_code"`, and omitted entirely
+    /// (not sent as `null`) otherwise — mirroring [`Self::authorization_endpoint`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_authorization_endpoint: Option<String>,
     /// URL of the OP's JSON Web Key Set document.
     pub jwks_uri: String,
     /// URL of the OP's UserInfo Endpoint.
@@ -86,6 +94,15 @@ impl OidcDiscovery {
             .grant_types_supported
             .iter()
             .any(|grant| grant == "authorization_code");
+        let has_device_code_grant = config
+            .grant_types_supported
+            .iter()
+            .any(|grant| grant == "urn:ietf:params:oauth:grant-type:device_code");
+        tracing::debug!(
+            has_authorization_code_grant,
+            has_device_code_grant,
+            "building OIDC discovery document from config"
+        );
 
         Self {
             issuer: config.issuer.clone(),
@@ -95,6 +112,8 @@ impl OidcDiscovery {
                 .then(|| vec!["S256".to_string()]),
             dpop_signing_alg_values_supported: None,
             token_endpoint: config.token_endpoint(),
+            device_authorization_endpoint: has_device_code_grant
+                .then(|| config.device_authorization_endpoint()),
             jwks_uri: config.jwks_url(),
             userinfo_endpoint: Some(config.userinfo_endpoint()),
             scopes_supported: config.scopes_supported.clone(),
@@ -475,5 +494,41 @@ mod tests {
         let doc: OidcDiscovery = serde_json::from_value(json).unwrap();
 
         assert_eq!(doc.revocation_endpoint, None);
+    }
+
+    #[test]
+    fn device_authorization_endpoint_advertised_when_device_code_grant_supported() {
+        let mut config = discovery_config();
+        config.grant_types_supported = vec![
+            "authorization_code".to_string(),
+            "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+        ];
+
+        let doc = OidcDiscovery::from_config(&config);
+        assert_eq!(
+            doc.device_authorization_endpoint,
+            Some("https://auth.example.com/device_authorization".to_string())
+        );
+
+        let json = serde_json::to_value(&doc).unwrap();
+        assert_eq!(
+            json.get("device_authorization_endpoint"),
+            Some(&serde_json::Value::String(
+                "https://auth.example.com/device_authorization".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn device_authorization_endpoint_omitted_when_no_device_code_grant() {
+        let doc = OidcDiscovery::from_config(&discovery_config());
+        assert_eq!(doc.device_authorization_endpoint, None);
+
+        let json = serde_json::to_value(&doc).unwrap();
+        assert!(
+            json.get("device_authorization_endpoint").is_none(),
+            "device_authorization_endpoint must be omitted (not null) when device_code grant is not supported; got {:?}",
+            json.get("device_authorization_endpoint")
+        );
     }
 }

@@ -8,6 +8,9 @@ pub mod jwt;
 /// module doc for why this is independent of `authkestra-op`'s own replay
 /// guard.
 pub mod dpop;
+pub use authkestra_engine::token::refusal::{
+    self, AuthScheme, ResourceRefusal, StepUpRequirement, INSUFFICIENT_USER_AUTHENTICATION,
+};
 pub use dpop::{DpopJtiRecord, DpopReplayStore, NoDpopReplayStore, DPOP_PROOF_MAX_AGE_SECS};
 
 #[cfg(feature = "policy")]
@@ -74,6 +77,138 @@ impl<I> Guard<I> {
                 if let Some(strategy) = self.strategies.first() {
                     strategy.authenticate(parts).await
                 } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    /// Attempt to authenticate the request, preserving a structured
+    /// [`ResourceRefusal`] (`WWW-Authenticate`, `DPoP-Nonce`, RFC 9470 step-up
+    /// parameters) when a strategy rejects presented credentials.
+    pub async fn authenticate_with_refusal(
+        &self,
+        parts: &Parts,
+    ) -> Result<Option<I>, ResourceRefusal> {
+        tracing::debug!(
+            policy = ?self.policy,
+            strategy_count = self.strategies.len(),
+            "dispatching Guard::authenticate_with_refusal"
+        );
+        match self.policy {
+            AuthPolicy::FirstSuccess => {
+                let mut last_refusal: Option<ResourceRefusal> = None;
+                for (idx, strategy) in self.strategies.iter().enumerate() {
+                    match strategy.authenticate_with_refusal(parts).await {
+                        Ok(Some(identity)) => {
+                            if let Some(prev) = &last_refusal {
+                                tracing::debug!(
+                                    strategy_index = idx,
+                                    discarded_error = %prev.error,
+                                    "strategy succeeded under FirstSuccess; discarding earlier refusal"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    strategy_index = idx,
+                                    "strategy succeeded under FirstSuccess"
+                                );
+                            }
+                            return Ok(Some(identity));
+                        }
+                        Ok(None) => {
+                            tracing::debug!(
+                                strategy_index = idx,
+                                "strategy abstained under FirstSuccess; trying next strategy"
+                            );
+                            continue;
+                        }
+                        Err(refusal) if refusal.status >= 500 => {
+                            tracing::warn!(
+                                strategy_index = idx,
+                                status = refusal.status,
+                                error = %refusal.error,
+                                "strategy returned server error under FirstSuccess; aborting chain"
+                            );
+                            return Err(refusal);
+                        }
+                        Err(refusal) => {
+                            tracing::debug!(
+                                strategy_index = idx,
+                                status = refusal.status,
+                                error = %refusal.error,
+                                "strategy refused credentials under FirstSuccess; trying remaining strategies"
+                            );
+                            last_refusal = Some(refusal);
+                        }
+                    }
+                }
+                match last_refusal {
+                    Some(refusal) => {
+                        tracing::debug!(
+                            status = refusal.status,
+                            error = %refusal.error,
+                            "no strategy succeeded under FirstSuccess; returning last refusal"
+                        );
+                        Err(refusal)
+                    }
+                    None => {
+                        tracing::debug!("all strategies abstained under FirstSuccess");
+                        Ok(None)
+                    }
+                }
+            }
+            AuthPolicy::AllSuccess => {
+                let mut last_identity = None;
+                for (idx, strategy) in self.strategies.iter().enumerate() {
+                    match strategy.authenticate_with_refusal(parts).await {
+                        Ok(Some(identity)) => {
+                            tracing::debug!(
+                                strategy_index = idx,
+                                "strategy succeeded under AllSuccess"
+                            );
+                            last_identity = Some(identity);
+                        }
+                        Ok(None) => {
+                            tracing::debug!(
+                                strategy_index = idx,
+                                "strategy abstained under AllSuccess; chain failed"
+                            );
+                            return Ok(None);
+                        }
+                        Err(refusal) => {
+                            tracing::debug!(
+                                strategy_index = idx,
+                                status = refusal.status,
+                                error = %refusal.error,
+                                "strategy refused credentials under AllSuccess; aborting chain"
+                            );
+                            return Err(refusal);
+                        }
+                    }
+                }
+                Ok(last_identity)
+            }
+            AuthPolicy::FailFast => {
+                if let Some(strategy) = self.strategies.first() {
+                    let result = strategy.authenticate_with_refusal(parts).await;
+                    match &result {
+                        Ok(Some(_)) => {
+                            tracing::debug!("first strategy succeeded under FailFast");
+                        }
+                        Ok(None) => {
+                            tracing::debug!("first strategy abstained under FailFast");
+                        }
+                        Err(refusal) => {
+                            tracing::debug!(
+                                status = refusal.status,
+                                error = %refusal.error,
+                                "first strategy refused credentials under FailFast"
+                            );
+                        }
+                    }
+                    result
+                } else {
+                    tracing::debug!("no strategies configured for FailFast Guard");
                     Ok(None)
                 }
             }
