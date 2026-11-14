@@ -1,4 +1,4 @@
-//! The generator of `conformance/devsig-profile-v1/vectors.json`.
+//! The generator of `crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json`.
 //!
 //! Every key here is a **fixed test key** (derived from a constant, or the PEM below), and every
 //! signature algorithm used is deterministic (ES256 through RFC 6979, Ed25519, RSA PKCS#1 v1.5),

@@ -403,9 +403,16 @@ pub async fn actix_device_verify_handler(
 }
 
 /// Maps an `OpError` from the attestation ceremony to an HTTP status and an
-/// OAuth2-shaped `{error, error_description}` body, matching the style the
-/// other OP handlers in this file already use for their own error enums.
+/// OAuth2-shaped `{error, error_description}` body (except `PrincipalRevoked`,
+/// which answers `403 {"error": "device_revoked"}` per RFC-014 §6).
 fn attestation_error_response(err: OpError) -> HttpResponse {
+    if matches!(&err, OpError::PrincipalRevoked) {
+        return HttpResponse::build(actix_web::http::StatusCode::FORBIDDEN).json(
+            serde_json::json!({
+                "error": "device_revoked",
+            }),
+        );
+    }
     let status = match &err {
         OpError::BadJwk(_) | OpError::BadAlg(_) => actix_web::http::StatusCode::BAD_REQUEST,
         OpError::InvalidChallenge
@@ -413,11 +420,9 @@ fn attestation_error_response(err: OpError) -> HttpResponse {
         | OpError::AttestationInvalid
         | OpError::KeyNotBound
         | OpError::SecondFactorFailed => actix_web::http::StatusCode::UNAUTHORIZED,
-        OpError::PrincipalRevoked => actix_web::http::StatusCode::FORBIDDEN,
         _ => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
     };
     let code = match &err {
-        OpError::PrincipalRevoked => "access_denied",
         OpError::BadJwk(_) | OpError::BadAlg(_) => "invalid_request",
         _ if status == actix_web::http::StatusCode::INTERNAL_SERVER_ERROR => "server_error",
         _ => "invalid_grant",
@@ -614,5 +619,21 @@ mod dpop_header_tests {
         );
         let err = extract_dpop_header(&headers).expect_err("a non-ASCII header must be refused");
         assert_eq!(err.error, "invalid_dpop_proof");
+    }
+}
+
+#[cfg(test)]
+mod attestation_error_tests {
+    use super::*;
+    use actix_web::http::StatusCode;
+    use authkestra_op::OpError;
+
+    #[actix_web::test]
+    async fn principal_revoked_returns_403_device_revoked() {
+        let resp = attestation_error_response(OpError::PrincipalRevoked);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json, serde_json::json!({ "error": "device_revoked" }));
     }
 }

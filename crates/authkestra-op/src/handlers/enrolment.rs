@@ -5,7 +5,7 @@
 use crate::attestation::{
     attestation_extra_claims, compute_cnf_jkt, constant_time_eq, parse_public_jwk,
     verify_challenge_signature, AttestationConfig, AttestationStatusProvider, EnrolmentChallenge,
-    EnrolmentChallengeStore, PrincipalType, SecondFactorProof, SecondFactorVerifier,
+    EnrolmentChallengeStore, KeyRole, PrincipalType, SecondFactorProof, SecondFactorVerifier,
 };
 use crate::error::OpError;
 use authkestra_engine::token::TokenManager;
@@ -34,6 +34,9 @@ pub struct EnrolStartRequest {
     /// Whether this is a real end-user device or a backend service
     /// asserting it verified one (spec §5.6.1).
     pub principal_type: PrincipalType,
+    /// The key's role (`ambient` vs `user_present`), minted by the OP.
+    #[serde(default)]
+    pub role: Option<KeyRole>,
     /// The freshly-generated public JWK — exactly what will later appear in
     /// the protected header of every request signature this key produces.
     /// Re-validated at every use (see `parse_public_jwk`).
@@ -141,19 +144,57 @@ pub async fn handle_enrol_start(
     // before we ever touch the second factor or the challenge store.
     parse_public_jwk(&req.public_jwk)?;
 
+    // Resolve the OP-minted key role and build the effective attribute map before
+    // invoking the second-factor verifier so host policies see the requested key role
+    // (including when caller `attributes` omits `"role"`), while preventing callers
+    // from smuggling `"role": "user_present"` via unvalidated `attributes` when
+    // `req.role` is `None`.
+    let mut attr_map = match req.attributes {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    let role = match req.role {
+        Some(role) => {
+            attr_map.insert("role".to_string(), Value::String(role.as_str().to_string()));
+            role
+        }
+        None => {
+            if attr_map.get("role").and_then(Value::as_str) == Some(KeyRole::UserPresent.as_str()) {
+                tracing::warn!(
+                    subject = %req.subject,
+                    "ignoring caller-supplied attributes.role=\"user_present\" when req.role is None; coercing to ambient"
+                );
+                attr_map.insert(
+                    "role".to_string(),
+                    Value::String(KeyRole::Ambient.as_str().to_string()),
+                );
+            } else {
+                attr_map
+                    .entry("role".to_string())
+                    .or_insert_with(|| Value::String(KeyRole::Ambient.as_str().to_string()));
+            }
+            KeyRole::Ambient
+        }
+    };
+
+    let verifier_attributes = Value::Object(attr_map.clone());
     second_factor
         .verify(
             &req.subject,
             req.principal_type,
             &req.second_factor,
-            &req.attributes,
+            &verifier_attributes,
         )
         .await?;
+
+    attr_map.insert("status".to_string(), Value::String("active".to_string()));
+    let attributes = Value::Object(attr_map);
 
     tracing::info!(
         subject = %req.subject,
         principal_id = %req.principal_id,
         principal_type = ?req.principal_type,
+        role = %role.as_str(),
         "second factor verified; issuing enrolment challenge"
     );
 
@@ -162,7 +203,7 @@ pub async fn handle_enrol_start(
         req.principal_id,
         req.principal_type,
         req.public_jwk,
-        req.attributes,
+        attributes,
         challenges,
         config,
     )
@@ -220,13 +261,33 @@ pub async fn handle_reissue_start(
 
     let subject = claims.sub;
 
-    let attributes = match status {
+    let existing_role = claims
+        .extra
+        .get("att")
+        .and_then(|att| att.get("role"))
+        .and_then(Value::as_str);
+
+    let raw_attributes = match status {
         Some(provider) => provider
             .current_attributes(&subject, &principal_id, principal_type)
             .await?
             .ok_or(OpError::PrincipalRevoked)?,
         None => claims.extra.get("att").cloned().unwrap_or(Value::Null),
     };
+
+    let mut attr_map = match raw_attributes {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(role) = existing_role {
+        attr_map.insert("role".to_string(), Value::String(role.to_string()));
+    } else {
+        attr_map
+            .entry("role".to_string())
+            .or_insert_with(|| Value::String(KeyRole::Ambient.as_str().to_string()));
+    }
+    attr_map.insert("status".to_string(), Value::String("active".to_string()));
+    let attributes = Value::Object(attr_map);
 
     tracing::info!(
         subject = %subject,
@@ -541,6 +602,7 @@ mod tests {
                 subject: "victim".to_string(),
                 principal_id: "attacker-device".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk,
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -714,6 +776,7 @@ mod tests {
                 subject: "user-ed".to_string(),
                 principal_id: "device-ed".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: public_jwk.clone(),
                 attributes: serde_json::json!({"kyc_level": 3}),
                 second_factor: SecondFactorProof {
@@ -771,6 +834,7 @@ mod tests {
                 subject: "user-1".to_string(),
                 principal_id: "device-1".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: key.public_jwk.clone(),
                 attributes: serde_json::json!({"kyc_level": 2}),
                 second_factor: SecondFactorProof {
@@ -835,6 +899,7 @@ mod tests {
                 subject: "user-2".to_string(),
                 principal_id: "device-2".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: key.public_jwk.clone(),
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -895,6 +960,7 @@ mod tests {
                 subject: "user-3".to_string(),
                 principal_id: "device-3".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: key.public_jwk,
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -928,6 +994,7 @@ mod tests {
                 subject: "user-4".to_string(),
                 principal_id: "device-4".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: submitted_key.public_jwk,
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -974,6 +1041,7 @@ mod tests {
                 subject: "user-5".to_string(),
                 principal_id: "device-5".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: key.public_jwk.clone(),
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -1073,6 +1141,7 @@ mod tests {
                 subject: subject.to_string(),
                 principal_id: principal_id.to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: key.public_jwk.clone(),
                 attributes: serde_json::json!({"kyc_level": 1}),
                 second_factor: SecondFactorProof {
@@ -1272,6 +1341,7 @@ mod tests {
                 subject: "user-10".to_string(),
                 principal_id: "device-10".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: key.public_jwk.clone(),
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -1322,6 +1392,7 @@ mod tests {
                 subject: "user-11".to_string(),
                 principal_id: "device-11".to_string(),
                 principal_type: PrincipalType::Device,
+                role: None,
                 public_jwk: jwk,
                 attributes: Value::Null,
                 second_factor: SecondFactorProof {
@@ -1352,6 +1423,7 @@ mod tests {
                 subject: "bff-1".to_string(),
                 principal_id: "svc-bff-1".to_string(),
                 principal_type: PrincipalType::Service,
+                role: None,
                 public_jwk: key.public_jwk.clone(),
                 attributes: serde_json::json!({"roles": ["ingress"]}),
                 second_factor: SecondFactorProof {
@@ -1419,6 +1491,7 @@ mod tests {
             subject: "user-1".to_string(),
             principal_id: "device-1".to_string(),
             principal_type: PrincipalType::Device,
+            role: None,
             public_jwk: key.public_jwk.clone(),
             second_factor: SecondFactorProof {
                 kind: "otp".to_string(),
@@ -1438,6 +1511,7 @@ mod tests {
             subject: "user-1".to_string(),
             principal_id: "device-1".to_string(),
             principal_type: PrincipalType::Device,
+            role: None,
             public_jwk: key.public_jwk,
             second_factor: SecondFactorProof {
                 kind: "otp".to_string(),
@@ -1452,5 +1526,381 @@ mod tests {
                 .await
                 .unwrap();
         assert!(!start_res.challenge.is_empty());
+    }
+
+    #[tokio::test]
+    async fn enrol_with_user_present_role_mints_user_present_att_role() {
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let tokens = test_tokens();
+        let config = test_config();
+        let key = generate_test_key();
+
+        let start_res = handle_enrol_start(
+            EnrolStartRequest {
+                subject: "user-role-1".to_string(),
+                principal_id: "device-role-1".to_string(),
+                principal_type: PrincipalType::Device,
+                role: Some(KeyRole::UserPresent),
+                public_jwk: key.public_jwk.clone(),
+                attributes: serde_json::json!({"kyc_level": 2}),
+                second_factor: SecondFactorProof {
+                    kind: "sms_otp".to_string(),
+                    value: "123456".to_string(),
+                },
+                requested_cnf_jkt: None,
+            },
+            &AlwaysPassSecondFactor,
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let signature = sign_challenge(&key, &start_res.challenge);
+
+        let complete_res = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: start_res.challenge,
+                challenge_signature: signature,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let claims = tokens
+            .validate_token(&complete_res.attestation, None)
+            .unwrap();
+        let att = claims.extra.get("att").unwrap();
+        assert_eq!(att["role"], "user_present");
+        assert_eq!(att["status"], "active");
+        assert_eq!(att["kyc_level"], 2);
+    }
+
+    #[tokio::test]
+    async fn enrol_two_keys_for_same_principal_succeeds() {
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let tokens = test_tokens();
+        let config = test_config();
+
+        let key_ambient = generate_test_key();
+        let key_user_present = generate_test_key();
+        let principal_id = "device-shared-dual-key";
+        let subject = "user-dual";
+
+        // Enrol Key 1: Ambient
+        let start_1 = handle_enrol_start(
+            EnrolStartRequest {
+                subject: subject.to_string(),
+                principal_id: principal_id.to_string(),
+                principal_type: PrincipalType::Device,
+                role: Some(KeyRole::Ambient),
+                public_jwk: key_ambient.public_jwk.clone(),
+                attributes: serde_json::json!({"tag": "ambient_key"}),
+                second_factor: SecondFactorProof {
+                    kind: "sms_otp".to_string(),
+                    value: "123456".to_string(),
+                },
+                requested_cnf_jkt: None,
+            },
+            &AlwaysPassSecondFactor,
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let sig_1 = sign_challenge(&key_ambient, &start_1.challenge);
+        let complete_1 = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: start_1.challenge,
+                challenge_signature: sig_1,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // Enrol Key 2: UserPresent for the same principal
+        let start_2 = handle_enrol_start(
+            EnrolStartRequest {
+                subject: subject.to_string(),
+                principal_id: principal_id.to_string(),
+                principal_type: PrincipalType::Device,
+                role: Some(KeyRole::UserPresent),
+                public_jwk: key_user_present.public_jwk.clone(),
+                attributes: serde_json::json!({"tag": "up_key"}),
+                second_factor: SecondFactorProof {
+                    kind: "sms_otp".to_string(),
+                    value: "123456".to_string(),
+                },
+                requested_cnf_jkt: None,
+            },
+            &AlwaysPassSecondFactor,
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let sig_2 = sign_challenge(&key_user_present, &start_2.challenge);
+        let complete_2 = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: start_2.challenge,
+                challenge_signature: sig_2,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let claims_1 = tokens
+            .validate_token(&complete_1.attestation, None)
+            .unwrap();
+        let claims_2 = tokens
+            .validate_token(&complete_2.attestation, None)
+            .unwrap();
+
+        assert_eq!(claims_1.extra.get("did").unwrap(), principal_id);
+        assert_eq!(claims_2.extra.get("did").unwrap(), principal_id);
+
+        let jkt_1 = claims_1.extra.get("cnf").unwrap()["jkt"].as_str().unwrap();
+        let jkt_2 = claims_2.extra.get("cnf").unwrap()["jkt"].as_str().unwrap();
+        assert_ne!(jkt_1, jkt_2);
+
+        let att_1 = claims_1.extra.get("att").unwrap();
+        assert_eq!(att_1["role"], "ambient");
+        assert_eq!(att_1["status"], "active");
+        assert_eq!(att_1["tag"], "ambient_key");
+
+        let att_2 = claims_2.extra.get("att").unwrap();
+        assert_eq!(att_2["role"], "user_present");
+        assert_eq!(att_2["status"], "active");
+        assert_eq!(att_2["tag"], "up_key");
+    }
+
+    #[tokio::test]
+    async fn reissue_preserves_att_role() {
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let tokens = test_tokens();
+        let config = test_config();
+        let key = generate_test_key();
+
+        // Enrol with user_present role
+        let start_res = handle_enrol_start(
+            EnrolStartRequest {
+                subject: "user-reissue-role".to_string(),
+                principal_id: "device-reissue-role".to_string(),
+                principal_type: PrincipalType::Device,
+                role: Some(KeyRole::UserPresent),
+                public_jwk: key.public_jwk.clone(),
+                attributes: serde_json::json!({"kyc_level": 1}),
+                second_factor: SecondFactorProof {
+                    kind: "sms_otp".to_string(),
+                    value: "123456".to_string(),
+                },
+                requested_cnf_jkt: None,
+            },
+            &AlwaysPassSecondFactor,
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let signature = sign_challenge(&key, &start_res.challenge);
+        let initial_attestation = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: start_res.challenge,
+                challenge_signature: signature,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // Reissue with status provider returning updated kyc_level
+        let status = StaticStatus(Some(serde_json::json!({"kyc_level": 4})));
+        let reissue_start = handle_reissue_start(
+            ReissueStartRequest {
+                attestation: initial_attestation.attestation,
+                public_jwk: key.public_jwk.clone(),
+                requested_cnf_jkt: None,
+            },
+            &tokens,
+            Some(&status),
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reissue_sig = sign_challenge(&key, &reissue_start.challenge);
+        let reissued = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: reissue_start.challenge,
+                challenge_signature: reissue_sig,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let claims = tokens.validate_token(&reissued.attestation, None).unwrap();
+        let att = claims.extra.get("att").unwrap();
+        assert_eq!(
+            att["role"], "user_present",
+            "reissue must preserve user_present role"
+        );
+        assert_eq!(att["status"], "active", "status active must be ensured");
+        assert_eq!(att["kyc_level"], 4, "refreshed attributes must be applied");
+    }
+
+    #[tokio::test]
+    async fn enrol_attributes_role_user_present_without_req_role_does_not_escalate() {
+        struct RejectUserPresentInVerifier;
+
+        #[async_trait]
+        impl SecondFactorVerifier for RejectUserPresentInVerifier {
+            async fn verify(
+                &self,
+                _subject: &str,
+                _principal_type: PrincipalType,
+                _proof: &SecondFactorProof,
+                attributes: &Value,
+            ) -> Result<(), OpError> {
+                if attributes.get("role").and_then(Value::as_str) == Some("user_present") {
+                    return Err(OpError::SecondFactorFailed);
+                }
+                Ok(())
+            }
+        }
+
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let tokens = test_tokens();
+        let config = test_config();
+        let key = generate_test_key();
+
+        let start_res = handle_enrol_start(
+            EnrolStartRequest {
+                subject: "user-smuggle-role".to_string(),
+                principal_id: "device-smuggle-role".to_string(),
+                principal_type: PrincipalType::Device,
+                role: None,
+                public_jwk: key.public_jwk.clone(),
+                attributes: serde_json::json!({
+                    "role": "user_present",
+                    "tag": "smuggle_attempt",
+                }),
+                second_factor: SecondFactorProof {
+                    kind: "sms_otp".to_string(),
+                    value: "123456".to_string(),
+                },
+                requested_cnf_jkt: None,
+            },
+            &RejectUserPresentInVerifier,
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let sig = sign_challenge(&key, &start_res.challenge);
+        let completed = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: start_res.challenge,
+                challenge_signature: sig,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let claims = tokens.validate_token(&completed.attestation, None).unwrap();
+        let att = claims.extra.get("att").unwrap();
+        assert_eq!(
+            att["role"], "ambient",
+            "attributes.role=\"user_present\" without req.role must coerce to ambient"
+        );
+        assert_eq!(att["tag"], "smuggle_attempt");
+        assert_eq!(att["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn enrol_req_role_user_present_is_visible_to_second_factor_verifier() {
+        struct RequireUserPresentAttribute;
+
+        #[async_trait]
+        impl SecondFactorVerifier for RequireUserPresentAttribute {
+            async fn verify(
+                &self,
+                _subject: &str,
+                _principal_type: PrincipalType,
+                _proof: &SecondFactorProof,
+                attributes: &Value,
+            ) -> Result<(), OpError> {
+                if attributes.get("role").and_then(Value::as_str) == Some("user_present") {
+                    Ok(())
+                } else {
+                    Err(OpError::SecondFactorFailed)
+                }
+            }
+        }
+
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let tokens = test_tokens();
+        let config = test_config();
+        let key = generate_test_key();
+
+        let start_res = handle_enrol_start(
+            EnrolStartRequest {
+                subject: "user-role-visible".to_string(),
+                principal_id: "device-role-visible".to_string(),
+                principal_type: PrincipalType::Device,
+                role: Some(KeyRole::UserPresent),
+                public_jwk: key.public_jwk.clone(),
+                attributes: serde_json::json!({}),
+                second_factor: SecondFactorProof {
+                    kind: "biometric".to_string(),
+                    value: "verified".to_string(),
+                },
+                requested_cnf_jkt: None,
+            },
+            &RequireUserPresentAttribute,
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let sig = sign_challenge(&key, &start_res.challenge);
+        let completed = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: start_res.challenge,
+                challenge_signature: sig,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let claims = tokens.validate_token(&completed.attestation, None).unwrap();
+        let att = claims.extra.get("att").unwrap();
+        assert_eq!(att["role"], "user_present");
+        assert_eq!(att["status"], "active");
     }
 }

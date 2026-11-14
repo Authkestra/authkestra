@@ -23,7 +23,7 @@ The wire contract — the `att` claim (an object with `status` and an optional k
 issuer and device algorithms, the `qsh`/`bdh` presence rule, and the refusal table (a JSON body
 `{"error": "<code>"}`, its status, and a `WWW-Authenticate: DeviceSignature` challenge on a
 `401`) — is [RFC-014, device-signature profile v1](../../docs/rfc-014-devsig-profile-v1.md).
-Its conformance vectors, [`conformance/devsig-profile-v1/vectors.json`](../../conformance/devsig-profile-v1/),
+Its conformance vectors, [`crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json`](conformance/devsig-profile-v1/),
 run against [`verify_at`] in `tests/profile_v1.rs`; client libraries vendor the same file.
 
 ```rust,ignore

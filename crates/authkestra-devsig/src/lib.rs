@@ -40,7 +40,7 @@
 //! `status` and an optional key `role` ([`KeyRole`]), a refusal is
 //! `{"error": "<code>"}` with the status and challenge [`Refusal`] gives, and a `qsh` or `bdh`
 //! must be present exactly when the request has a query or a body. The conformance vectors in
-//! `conformance/devsig-profile-v1/` are run against [`verify_at`] by this crate's tests, and
+//! `crates/authkestra-devsig/conformance/devsig-profile-v1/` are run against [`verify_at`] by this crate's tests, and
 //! client libraries vendor the same file.
 //!
 //! ## Framework integration — lives in the adapter crates, per `AGENTS.md`

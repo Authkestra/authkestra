@@ -3,7 +3,7 @@
 > **Status: proposed.** Implemented in `authkestra-devsig`, `authkestra-axum` and
 > `authkestra-actix` (`devsig` feature) by the PR that adds this file; accepted when a
 > maintainer says so on the profile epic. The conformance vectors are
-> [`conformance/devsig-profile-v1/vectors.json`](../conformance/devsig-profile-v1/vectors.json).
+> [`crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json`](../crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json).
 
 ## 1. Summary
 
@@ -184,28 +184,27 @@ The client action is what a client SHOULD do; it is the contract fespalier's
 
 ## 6. Enrolment and renewal
 
-Profile v1 documents the issuer side as `authkestra-op` serves it today
-(`authkestra-axum`/`authkestra-actix` `op_*_attestation_router`); changing it is follow-up work on
-the profile epic.
+Profile v1 documents the issuer side as `authkestra-op` serves it
+(`authkestra-axum`/`authkestra-actix` `op_*_attestation_router`).
 
 | Step | Request | Response |
 | --- | --- | --- |
-| `POST /enrol` | `{subject, principal_id, principal_type, public_jwk, attributes, second_factor: {kind, value}}` | `{challenge, expires_in}` |
+| `POST /enrol` | `{subject, principal_id, principal_type, role?, public_jwk, attributes, second_factor: {kind, value}}` | `{challenge, expires_in}` |
 | `POST /reissue` | `{attestation, public_jwk}` (the still-valid attestation and the key it binds) | `{challenge, expires_in}` |
 | `POST /enrol/complete` | `{challenge, challenge_signature}` (a JWS over `{"challenge": "<challenge>"}` by the new key) | `{attestation, expires_in, reissue_after}` |
 
 - The second factor is checked in `/enrol`, before a challenge is issued.
-- One key per ceremony. A device with two keys (ambient and user-present) enrols twice; until the
-  OP mints `att.role` itself, the host's `attributes` carry it. *(follow-up)*
+- One key per ceremony. A device with two keys (`ambient` and `user_present`) enrols twice via
+  `role` (`"ambient"` | `"user_present"`, defaulting to `"ambient"`), and the OP mints
+  `att.role` directly into the attestation.
 - `/reissue` needs the current attestation and the JWK, so a client renews before `exp`, at
-  `reissue_after`. A client whose attestation already expired enrols again.
+  `reissue_after`, preserving `att.role`. A client whose attestation already expired enrols again.
 - A principal the host's `AttestationStatusProvider` reports inactive is refused at `/reissue` with
-  `403`. Today the body is the OAuth-shaped `{"error": "access_denied", …}`; profile v1's
-  `device_revoked` there is a follow-up. Clients SHOULD read a `403` from `/reissue` as revoked.
+  `403` and body `{"error": "device_revoked"}` (RFC 9470 / profile v1 refusal body).
 
 ## 7. Conformance vectors
 
-`conformance/devsig-profile-v1/vectors.json` holds the verifier configuration, the issuer's public
+`crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json` holds the verifier configuration, the issuer's public
 keys, the refusal table above, the legacy aliases, and 44 vectors (43 required; the EdDSA device
 key is optional). Each vector is a request (method, path, query, body, headers), the replay state
 (`seen_jtis`, or an unavailable store), the instant `now` it is checked at, and the expected

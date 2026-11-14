@@ -1,6 +1,6 @@
 # Device-signature profile v1: conformance vectors
 
-`vectors.json` is the shared test set of [RFC-014](../../docs/rfc-014-devsig-profile-v1.md): what a
+`vectors.json` is the shared test set of [RFC-014](../../../../docs/rfc-014-devsig-profile-v1.md): what a
 device-signed request looks like, and what a verifier must answer for it. Authkestra
 (`authkestra-devsig`), fespalier (`fespalier_sign_keypair`) and CrateStack (its device-signature
 provider) run the same file, so they agree on one table rather than on three.

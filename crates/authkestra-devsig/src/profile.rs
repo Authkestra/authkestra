@@ -2,7 +2,7 @@
 //! every framework adapter answers with.
 //!
 //! The normative text is `docs/rfc-014-devsig-profile-v1.md`; the shared conformance vectors are
-//! `conformance/devsig-profile-v1/vectors.json`, which `tests/profile_v1.rs` runs against
+//! `crates/authkestra-devsig/conformance/devsig-profile-v1/vectors.json`, which `tests/profile_v1.rs` runs against
 //! [`crate::verify_at`]. Client libraries in other languages (fespalier's
 //! `fespalier_sign_keypair`, CrateStack's device-signature provider) vendor that file by commit
 //! and run the same vectors, so all three agree on one table instead of three.

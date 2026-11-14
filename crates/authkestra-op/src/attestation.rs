@@ -52,6 +52,27 @@ impl PrincipalType {
     }
 }
 
+/// Distinguishes an ambient device signature from a user-present key
+/// (e.g. biometric- or PIN-gated) in the issued attestation's `att.role` claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyRole {
+    /// Ambient device key available without explicit user interaction.
+    Ambient,
+    /// Key requiring explicit user presence (biometric, hardware token, credential).
+    UserPresent,
+}
+
+impl KeyRole {
+    /// The wire value used in JSON claims.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            KeyRole::Ambient => "ambient",
+            KeyRole::UserPresent => "user_present",
+        }
+    }
+}
+
 /// Configuration for the attestation ceremony. Deliberately separate from
 /// `OpConfig`: that type describes standard OAuth2/OIDC provider behavior
 /// that every existing handler already depends on, and this extension
