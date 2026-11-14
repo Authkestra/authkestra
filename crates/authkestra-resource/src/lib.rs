@@ -8,6 +8,9 @@ pub mod jwt;
 /// module doc for why this is independent of `authkestra-op`'s own replay
 /// guard.
 pub mod dpop;
+pub use authkestra_engine::token::refusal::{
+    self, AuthScheme, ResourceRefusal, StepUpRequirement, INSUFFICIENT_USER_AUTHENTICATION,
+};
 pub use dpop::{DpopJtiRecord, DpopReplayStore, NoDpopReplayStore, DPOP_PROOF_MAX_AGE_SECS};
 
 #[cfg(feature = "policy")]
@@ -73,6 +76,50 @@ impl<I> Guard<I> {
             AuthPolicy::FailFast => {
                 if let Some(strategy) = self.strategies.first() {
                     strategy.authenticate(parts).await
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    /// Attempt to authenticate the request, preserving a structured
+    /// [`ResourceRefusal`] (`WWW-Authenticate`, `DPoP-Nonce`, RFC 9470 step-up
+    /// parameters) when a strategy rejects presented credentials.
+    pub async fn authenticate_with_refusal(
+        &self,
+        parts: &Parts,
+    ) -> Result<Option<I>, ResourceRefusal> {
+        match self.policy {
+            AuthPolicy::FirstSuccess => {
+                let mut last_refusal = None;
+                for strategy in &self.strategies {
+                    match strategy.authenticate_with_refusal(parts).await {
+                        Ok(Some(identity)) => return Ok(Some(identity)),
+                        Ok(None) => continue,
+                        Err(refusal) if refusal.status >= 500 => return Err(refusal),
+                        Err(refusal) => last_refusal = Some(refusal),
+                    }
+                }
+                match last_refusal {
+                    Some(refusal) => Err(refusal),
+                    None => Ok(None),
+                }
+            }
+            AuthPolicy::AllSuccess => {
+                let mut last_identity = None;
+                for strategy in &self.strategies {
+                    match strategy.authenticate_with_refusal(parts).await {
+                        Ok(Some(identity)) => last_identity = Some(identity),
+                        Ok(None) => return Ok(None),
+                        Err(refusal) => return Err(refusal),
+                    }
+                }
+                Ok(last_identity)
+            }
+            AuthPolicy::FailFast => {
+                if let Some(strategy) = self.strategies.first() {
+                    strategy.authenticate_with_refusal(parts).await
                 } else {
                     Ok(None)
                 }

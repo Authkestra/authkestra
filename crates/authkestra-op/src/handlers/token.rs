@@ -933,7 +933,12 @@ async fn handle_device_code(
             let now = Utc::now();
             let mut updated = session.clone();
             updated.last_polled_at = Some(now);
-            let _ = op_store.store_device_code(updated).await;
+            if let Err(e) = op_store.update_device_code(updated).await {
+                tracing::debug!(
+                    error = ?e,
+                    "Failed to record pending device-code poll timestamp"
+                );
+            }
 
             if let Some(last_poll) = session.last_polled_at {
                 if now < last_poll + chrono::Duration::seconds(5) {
@@ -997,7 +1002,7 @@ async fn handle_device_code(
                 let sanitized_identity =
                     sanitize_identity_for_scopes(&identity, Some(&session.scope));
 
-                let mut extra = HashMap::new();
+                let mut extra = crate::amr_acr::amr_acr_extra_claims(&identity);
                 merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
                 let access_token = match tokens.issue_access_token(
@@ -1019,7 +1024,8 @@ async fn handle_device_code(
                 };
 
                 let id_token = if has_scope(&session.scope, "openid") {
-                    let id_extra = crate::amr_acr::amr_acr_extra_claims(&identity);
+                    let id_extra =
+                        crate::amr_acr::id_token_extra_claims(&identity, &sanitized_identity);
                     match tokens.issue_id_token_with_extra(
                         sanitized_identity,
                         &client_id,
@@ -1125,7 +1131,16 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
         });
     }
 
-    let code_str = req.code.as_ref().unwrap();
+    let Some(code_str) = req.code.as_deref().filter(|s| !s.is_empty()) else {
+        tracing::debug!(
+            client_id = %client_id,
+            "Missing code in authorization_code token request"
+        );
+        return Err(TokenErrorResponse {
+            error: "invalid_request".to_string(),
+            error_description: "code is required".to_string(),
+        });
+    };
     let req_redirect_uri = req.redirect_uri.as_deref().unwrap_or("");
 
     // 3. Consume the code atomically
@@ -1270,7 +1285,7 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
     let sanitized_identity =
         sanitize_identity_for_scopes(&auth_code.identity, Some(&auth_code.scope));
 
-    let mut extra = HashMap::new();
+    let mut extra = crate::amr_acr::amr_acr_extra_claims(&auth_code.identity);
     merge_dpop_cnf(&mut extra, req.dpop_jkt.as_deref());
 
     let access_token = match tokens.issue_access_token(
@@ -1293,7 +1308,8 @@ pub async fn default_handle_authorization_code<S: OpStore + ?Sized>(
     };
 
     let id_token = if has_scope(&auth_code.scope, "openid") {
-        let id_extra = crate::amr_acr::amr_acr_extra_claims(&auth_code.identity);
+        let id_extra =
+            crate::amr_acr::id_token_extra_claims(&auth_code.identity, &sanitized_identity);
         match tokens.issue_id_token_with_extra(
             sanitized_identity,
             &client_id,
@@ -1899,7 +1915,7 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
 
     let sanitized_identity = sanitize_identity_for_scopes(&old_rt.identity, Some(&old_rt.scope));
 
-    let mut extra = HashMap::new();
+    let mut extra = crate::amr_acr::amr_acr_extra_claims(&old_rt.identity);
     merge_dpop_cnf(&mut extra, jkt.as_deref());
 
     let access_token = match tokens.issue_access_token(
@@ -1929,7 +1945,7 @@ pub(crate) async fn default_handle_refresh_token<S: OpStore + ?Sized>(
     // `nonce` as OPTIONAL on a refreshed id_token, so omitting it is
     // conformant, not a shortcut.
     let id_token = if has_scope(&old_rt.scope, "openid") {
-        let id_extra = crate::amr_acr::amr_acr_extra_claims(&old_rt.identity);
+        let id_extra = crate::amr_acr::id_token_extra_claims(&old_rt.identity, &sanitized_identity);
         match tokens.issue_id_token_with_extra(
             sanitized_identity,
             &client_id,
@@ -2176,7 +2192,7 @@ pub async fn default_handle_token_exchange(
     // not depend on which requested_token_type value was sent. No nonce is
     // reflected, since RFC 8693 exchange requests don't carry one.
     let id_token = if granted_openid {
-        let id_extra = crate::amr_acr::amr_acr_extra_claims(&identity);
+        let id_extra = crate::amr_acr::id_token_extra_claims(&identity, &sanitized_identity);
         match tokens.issue_id_token_with_extra(
             sanitized_identity.clone(),
             &client_id,
@@ -2197,7 +2213,7 @@ pub async fn default_handle_token_exchange(
         None
     };
 
-    let mut extra = HashMap::new();
+    let mut extra = crate::amr_acr::amr_acr_extra_claims(&identity);
     merge_dpop_cnf(&mut extra, dpop_jkt.as_deref());
 
     let access_token = match tokens.issue_user_token_with_extra(
@@ -4480,6 +4496,235 @@ mod tests {
 
         assert!(!claims.extra.contains_key("amr"));
         assert!(!claims.extra.contains_key("acr"));
+    }
+
+    /// Issue #439 / CrateStack #1245: RFC 9068 §2.2.2 `auth_time`, `acr`, and
+    /// `amr` must also ride on the issued user access token when the identity
+    /// carries `IDENTITY_ATTR_AMR` / `IDENTITY_ATTR_AUTH_TIME`, so resource
+    /// servers (`authkestra-resource` and CrateStack `@authn`) can enforce
+    /// step-up and `max_age` directly on the access token.
+    #[tokio::test]
+    async fn access_token_carries_auth_time_acr_and_amr_when_present_on_identity() {
+        let authenticated_at = 1_757_843_000_i64;
+        let mut identity = identity_with_amr("password totp", true);
+        identity.attributes.insert(
+            authkestra_engine::auth::state::IDENTITY_ATTR_AUTH_TIME.to_string(),
+            authenticated_at.to_string(),
+        );
+
+        let clients = authkestra_engine::store::memory::MemoryStore::<ClientRegistration>::new();
+        clients
+            .set(
+                "client1",
+                refresh_test_client(),
+                std::time::Duration::from_secs(31536000),
+            )
+            .await
+            .unwrap();
+
+        let mut refresh =
+            authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new();
+        refresh
+            .store_token(RefreshToken::new(
+                "rt-access-amr".to_string(),
+                "client1".to_string(),
+                identity,
+                "openid profile".to_string(),
+                Utc::now() + Duration::days(1),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let tokens = test_tokens();
+        let res = handle_token(
+            refresh_test_req("rt-access-amr"),
+            None,
+            &test_config(false),
+            &mut crate::store::CompositeOpStore::new(
+                clients,
+                authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+                refresh,
+                authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(),
+            ),
+            &tokens,
+        )
+        .await
+        .unwrap();
+
+        let access_claims = tokens
+            .validate_token(&res.access_token, None)
+            .expect("issued access_token should validate");
+
+        assert_eq!(
+            access_claims.extra.get("auth_time"),
+            Some(&serde_json::json!(authenticated_at))
+        );
+        assert_eq!(
+            access_claims.extra.get("acr"),
+            Some(&serde_json::json!(crate::amr_acr::ACR_MFA))
+        );
+        assert_eq!(
+            access_claims.extra.get("amr"),
+            Some(&serde_json::json!(["pwd", "otp", "totp", "mfa"]))
+        );
+    }
+
+    /// Issue #445: standard OIDC Core §5.1 top-level `email`, `email_verified`,
+    /// `name`, and `preferred_username` claims must be populated on the ID
+    /// token when the corresponding `email` / `profile` scopes are granted, and
+    /// omitted when those scopes are absent.
+    #[tokio::test]
+    async fn id_token_carries_top_level_oidc_profile_and_email_claims_gated_by_scope() {
+        let mut attrs = HashMap::new();
+        attrs.insert("email_verified".to_string(), "true".to_string());
+        attrs.insert("name".to_string(), "Ada Lovelace".to_string());
+        attrs.insert("preferred_username".to_string(), "ada".to_string());
+        let identity = Identity {
+            provider_id: "test".to_string(),
+            external_id: "user-445".to_string(),
+            username: Some("ada_fallback".to_string()),
+            email: Some("ada@example.com".to_string()),
+            attributes: attrs,
+        };
+
+        let mut config = test_config(false);
+        config.scopes_supported.push("email".to_string());
+
+        let mut client = refresh_test_client();
+        client.scopes.push("email".to_string());
+
+        let clients = authkestra_engine::store::memory::MemoryStore::<ClientRegistration>::new();
+        clients
+            .set("client1", client, std::time::Duration::from_secs(31536000))
+            .await
+            .unwrap();
+
+        let mut refresh =
+            authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new();
+        refresh
+            .store_token(RefreshToken::new(
+                "rt-445-all".to_string(),
+                "client1".to_string(),
+                identity.clone(),
+                "openid profile email".to_string(),
+                Utc::now() + Duration::days(1),
+                None,
+            ))
+            .await
+            .unwrap();
+        refresh
+            .store_token(RefreshToken::new(
+                "rt-445-openid-only".to_string(),
+                "client1".to_string(),
+                identity,
+                "openid".to_string(),
+                Utc::now() + Duration::days(1),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let tokens = test_tokens();
+        let mut store = crate::store::CompositeOpStore::new(
+            clients,
+            authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+            refresh,
+            authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+            ),
+        );
+
+        let full = handle_token(
+            refresh_test_req("rt-445-all"),
+            None,
+            &config,
+            &mut store,
+            &tokens,
+        )
+        .await
+        .unwrap();
+        let full_claims = tokens
+            .validate_token(full.id_token.as_ref().unwrap(), None)
+            .unwrap();
+        assert_eq!(
+            full_claims.extra.get("email"),
+            Some(&serde_json::json!("ada@example.com"))
+        );
+        assert_eq!(
+            full_claims.extra.get("email_verified"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            full_claims.extra.get("name"),
+            Some(&serde_json::json!("Ada Lovelace"))
+        );
+        assert_eq!(
+            full_claims.extra.get("preferred_username"),
+            Some(&serde_json::json!("ada"))
+        );
+
+        let openid_only = handle_token(
+            refresh_test_req("rt-445-openid-only"),
+            None,
+            &config,
+            &mut store,
+            &tokens,
+        )
+        .await
+        .unwrap();
+        let openid_only_claims = tokens
+            .validate_token(openid_only.id_token.as_ref().unwrap(), None)
+            .unwrap();
+        assert!(!openid_only_claims.extra.contains_key("email"));
+        assert!(!openid_only_claims.extra.contains_key("email_verified"));
+        assert!(!openid_only_claims.extra.contains_key("name"));
+        assert!(!openid_only_claims.extra.contains_key("preferred_username"));
+    }
+
+    /// Issue #427: calling `default_handle_authorization_code` directly (or via
+    /// a custom `OpStore` override) with `code: None` or `code: Some("")` must
+    /// return `Err(invalid_request)` instead of panicking on `.unwrap()`.
+    #[tokio::test]
+    async fn default_handle_authorization_code_rejects_missing_or_empty_code_without_panicking() {
+        let mut store = crate::store::CompositeOpStore::new(
+            authkestra_engine::store::memory::MemoryStore::<ClientRegistration>::new(),
+            authkestra_engine::store::memory::MemoryStore::<AuthorizationCode>::new(),
+            authkestra_engine::store::memory::MemoryStore::<RefreshToken>::new(),
+            authkestra_engine::store::memory::MemoryStore::<crate::device::DeviceCodeSession>::new(
+            ),
+        );
+        let client = ClientRegistration {
+            client_id: "client1".to_string(),
+            client_secret_hash: None,
+            redirect_uris: vec!["https://client.example.com/cb".to_string()],
+            grant_types: vec![GrantType::AuthorizationCode],
+            scopes: vec!["openid".to_string()],
+            require_pkce: true,
+            allowed_audiences: vec![],
+            token_endpoint_auth_method: None,
+            jwks: None,
+        };
+        let config = test_config(false);
+        let tokens = test_tokens();
+
+        for missing in [None, Some(String::new())] {
+            let mut req = refresh_test_req("unused");
+            req.grant_type = "authorization_code".to_string();
+            req.refresh_token = None;
+            req.code = missing;
+
+            let err = default_handle_authorization_code(
+                req,
+                "client1".to_string(),
+                client.clone(),
+                &config,
+                &mut store,
+                &tokens,
+            )
+            .await
+            .expect_err("missing code must return Err(invalid_request), not panic");
+            assert_eq!(err.error, "invalid_request");
+        }
     }
 
     // --- OpStore::handle_token_exchange override seam (issue #204) ---

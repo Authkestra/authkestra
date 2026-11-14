@@ -27,7 +27,7 @@ pub mod ssf;
 #[cfg(feature = "policy")]
 pub mod policy;
 
-pub use helpers::AxumError;
+pub use helpers::{resource_refusal_response, AxumError};
 #[cfg(feature = "session")]
 pub use helpers::{Session, SessionStore};
 
@@ -207,7 +207,7 @@ where
     ) -> Result<Self, Self::Rejection> {
         tracing::debug!("extracting generic Auth from request via Guard");
         let guard = Arc::<authkestra_resource::Guard<I>>::from_ref(state);
-        match guard.authenticate(parts).await {
+        match guard.authenticate_with_refusal(parts).await {
             Ok(Some(identity)) => {
                 tracing::info!("successfully authenticated request via Guard");
                 Ok(Auth(identity))
@@ -216,9 +216,16 @@ where
                 tracing::warn!("authentication failed: no identity returned");
                 Err(AxumError::Unauthorized("Authentication failed".to_string()))
             }
-            Err(e) => {
-                tracing::error!(error = %e, "internal error during authentication");
-                Err(AxumError::Internal(e.to_string()))
+            Err(refusal) if refusal.status >= 500 => {
+                let msg = refusal
+                    .error_description
+                    .unwrap_or_else(|| refusal.error.clone());
+                tracing::error!(error = %msg, "internal error during authentication");
+                Err(AxumError::Internal(msg))
+            }
+            Err(refusal) => {
+                tracing::warn!(error = %refusal.error, "authentication refused with challenge");
+                Err(AxumError::ResourceRefusal(refusal))
             }
         }
     }

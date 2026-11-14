@@ -122,12 +122,38 @@ pub async fn handle_userinfo<S: OpStore + ?Sized>(
     };
 
     if scopes.contains(&"email") {
-        response.email = identity.email;
+        response.email = identity
+            .email
+            .or_else(|| identity.attributes.get("email").cloned());
+        if let Some(verified) = identity
+            .attributes
+            .get("email_verified")
+            .and_then(|raw| raw.parse::<bool>().ok())
+        {
+            response.extra.insert(
+                "email_verified".to_string(),
+                serde_json::Value::Bool(verified),
+            );
+        }
     }
 
     if scopes.contains(&"profile") {
-        response.name = identity.username;
-        // Optionally populate other profile claims from attributes
+        response.name = identity
+            .attributes
+            .get("name")
+            .cloned()
+            .or_else(|| identity.username.clone());
+        if let Some(preferred_username) = identity
+            .attributes
+            .get("preferred_username")
+            .cloned()
+            .or(identity.username)
+        {
+            response.extra.insert(
+                "preferred_username".to_string(),
+                serde_json::Value::String(preferred_username),
+            );
+        }
     }
 
     tracing::info!(sub = %response.sub, "Successfully returned userinfo");

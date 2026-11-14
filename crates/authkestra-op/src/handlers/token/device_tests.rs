@@ -369,3 +369,146 @@ async fn test_device_flow_invalid_scope_does_not_consume_code() {
         .unwrap()
         .is_some());
 }
+
+/// Issue #446: a pending poll must record `last_polled_at` via
+/// `update_device_code` so a second immediate poll is answered `slow_down`.
+#[tokio::test]
+async fn test_device_pending_poll_records_last_polled_at_and_triggers_slow_down() {
+    let (devices, clients) = setup_store(DeviceCodeStatus::Pending, "client1", "openid").await;
+    let mut store = crate::store::CompositeOpStore::new(
+        clients,
+        authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new(),
+        authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+        devices.clone(),
+    );
+    let config = test_config(false);
+    let tokens = test_tokens();
+
+    let first = handle_token(
+        default_device_req("dev123"),
+        None,
+        &config,
+        &mut store,
+        &tokens,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(first.error, "authorization_pending");
+
+    let second = handle_token(
+        default_device_req("dev123"),
+        None,
+        &config,
+        &mut store,
+        &tokens,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(second.error, "slow_down");
+}
+
+/// Issue #446: if `handle_device_verify` approves (or denies) a session in the
+/// window between `handle_device_code`'s `get_device_code` (which read
+/// `Pending`) and its write-back of `last_polled_at`, the write-back must go
+/// through `update_device_code` (conditional on `Pending`), NOT
+/// `store_device_code` (which in `MemoryStore`/`RedisStore` unconditionally
+/// overwrites the row back to `Pending`).
+#[tokio::test]
+async fn test_device_pending_poll_does_not_overwrite_concurrent_approval() {
+    struct ConcurrentApprovalDeviceStore {
+        inner: authkestra_engine::store::memory::MemoryStore<DeviceCodeSession>,
+        approve_after_read: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl DeviceCodeStore for ConcurrentApprovalDeviceStore {
+        async fn store_device_code(
+            &mut self,
+            session: DeviceCodeSession,
+        ) -> Result<(), authkestra_engine::store::StoreError> {
+            self.inner.store_device_code(session).await
+        }
+
+        async fn get_device_code(
+            &mut self,
+            device_code: &str,
+        ) -> Result<Option<DeviceCodeSession>, authkestra_engine::store::StoreError> {
+            let res = self.inner.get_device_code(device_code).await?;
+            if self.approve_after_read {
+                self.approve_after_read = false;
+                if let Some(mut approved) = res.clone() {
+                    approved.status = DeviceCodeStatus::Approved(test_identity());
+                    self.inner.update_device_code(approved).await?;
+                }
+            }
+            Ok(res)
+        }
+
+        async fn get_by_user_code(
+            &mut self,
+            user_code: &str,
+        ) -> Result<Option<DeviceCodeSession>, authkestra_engine::store::StoreError> {
+            self.inner.get_by_user_code(user_code).await
+        }
+
+        async fn update_device_code(
+            &mut self,
+            session: DeviceCodeSession,
+        ) -> Result<(), authkestra_engine::store::StoreError> {
+            self.inner.update_device_code(session).await
+        }
+
+        async fn delete_device_code(
+            &mut self,
+            device_code: &str,
+        ) -> Result<(), authkestra_engine::store::StoreError> {
+            self.inner.delete_device_code(device_code).await
+        }
+
+        async fn consume_device_code(
+            &mut self,
+            device_code: &str,
+        ) -> Result<Option<DeviceCodeSession>, authkestra_engine::store::StoreError> {
+            self.inner.consume_device_code(device_code).await
+        }
+    }
+
+    let (devices, clients) = setup_store(DeviceCodeStatus::Pending, "client1", "openid").await;
+    let mut store = crate::store::CompositeOpStore::new(
+        clients,
+        authkestra_engine::store::memory::MemoryStore::<crate::code::AuthorizationCode>::new(),
+        authkestra_engine::store::memory::MemoryStore::<crate::refresh::RefreshToken>::new(),
+        ConcurrentApprovalDeviceStore {
+            inner: devices.clone(),
+            approve_after_read: true,
+        },
+    );
+    let config = test_config(false);
+    let tokens = test_tokens();
+
+    // First poll reads `Pending`, while `handle_device_verify` concurrently
+    // transitions the stored session to `Approved`.
+    let first = handle_token(
+        default_device_req("dev123"),
+        None,
+        &config,
+        &mut store,
+        &tokens,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(first.error, "authorization_pending");
+
+    // The concurrent `Approved` decision must still be intact in the store, so
+    // the next poll redeems tokens instead of being stuck in `Pending` forever.
+    let second = handle_token(
+        default_device_req("dev123"),
+        None,
+        &config,
+        &mut store,
+        &tokens,
+    )
+    .await
+    .expect("concurrent approval must not be clobbered by the pending poll's write-back");
+    assert!(!second.access_token.is_empty());
+}

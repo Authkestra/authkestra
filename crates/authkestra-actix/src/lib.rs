@@ -426,7 +426,7 @@ where
                 }
             }
 
-            match guard.authenticate(&parts).await {
+            match guard.authenticate_with_refusal(&parts).await {
                 Ok(Some(identity)) => {
                     tracing::info!("successfully authenticated request via Guard");
                     Ok(Auth(identity))
@@ -435,12 +435,63 @@ where
                     tracing::warn!("authentication failed: no identity returned");
                     Err(actix_web::error::ErrorUnauthorized("Authentication failed"))
                 }
-                Err(e) => {
-                    tracing::error!(error = %e, "internal error during authentication");
-                    Err(actix_web::error::ErrorInternalServerError(e.to_string()))
+                Err(refusal) if refusal.status >= 500 => {
+                    let msg = refusal
+                        .error_description
+                        .unwrap_or_else(|| refusal.error.clone());
+                    tracing::error!(error = %msg, "internal error during authentication");
+                    Err(actix_web::error::ErrorInternalServerError(msg))
+                }
+                Err(refusal) => {
+                    tracing::warn!(error = %refusal.error, "authentication refused with challenge");
+                    Err(actix_web::Error::from(ResourceRefusalActixError(refusal)))
                 }
             }
         })
+    }
+}
+
+/// Converts a [`authkestra_engine::token::refusal::ResourceRefusal`] into an
+/// Actix HTTP response with `WWW-Authenticate`, optional `DPoP-Nonce`,
+/// `Cache-Control: no-store`, and JSON error body.
+pub fn resource_refusal_response(
+    refusal: &authkestra_engine::token::refusal::ResourceRefusal,
+) -> actix_web::HttpResponse {
+    let status = actix_web::http::StatusCode::from_u16(refusal.status)
+        .unwrap_or(actix_web::http::StatusCode::UNAUTHORIZED);
+    let mut resp = actix_web::HttpResponse::build(status);
+    resp.insert_header((actix_web::http::header::CONTENT_TYPE, "application/json"));
+    resp.insert_header((actix_web::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"));
+    resp.insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"));
+    if let Some(www_auth) = refusal.www_authenticate() {
+        resp.insert_header((actix_web::http::header::WWW_AUTHENTICATE, www_auth));
+    }
+    if let Some(nonce) = &refusal.dpop_nonce {
+        resp.insert_header((
+            authkestra_engine::token::dpop_nonce::DPOP_NONCE_HEADER,
+            nonce.as_str(),
+        ));
+    }
+    resp.body(refusal.body())
+}
+
+#[derive(Debug)]
+struct ResourceRefusalActixError(authkestra_engine::token::refusal::ResourceRefusal);
+
+impl std::fmt::Display for ResourceRefusalActixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unauthorized: {}", self.0.error)
+    }
+}
+
+impl actix_web::ResponseError for ResourceRefusalActixError {
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        actix_web::http::StatusCode::from_u16(self.0.status)
+            .unwrap_or(actix_web::http::StatusCode::UNAUTHORIZED)
+    }
+
+    fn error_response(&self) -> actix_web::HttpResponse {
+        resource_refusal_response(&self.0)
     }
 }
 

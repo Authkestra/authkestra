@@ -2199,3 +2199,113 @@ async fn the_validation_path_never_logs_the_token() {
         "the token reached the logs:\n{logs}"
     );
 }
+
+#[tokio::test]
+async fn static_jwks_validates_tokens_offline_without_network_fetch() {
+    use authkestra_resource::jwt::Jwks;
+
+    let key = generate_rsa_key(Some("static-kid-1"));
+    let config = ValidationConfig::builder()
+        .static_jwks(Jwks::from_keys(vec![key.jwk.clone()]))
+        .issuer("https://static-issuer.example")
+        .audience("api-resource")
+        .build();
+    let strategy: JwtStrategy<TestClaims> = JwtStrategy::new(config);
+
+    let valid_token = sign_token(
+        &key.encoding_key,
+        Some("static-kid-1"),
+        &serde_json::json!({
+            "sub": "user-static",
+            "iss": "https://static-issuer.example",
+            "aud": "api-resource",
+            "exp": future_exp(),
+        }),
+    );
+
+    let request = Request::builder()
+        .header(AUTHORIZATION, format!("Bearer {valid_token}"))
+        .body(())
+        .unwrap();
+    let (parts, _) = request.into_parts();
+
+    let claims = strategy
+        .authenticate_with_refusal(&parts)
+        .await
+        .expect("static JWKS token must succeed")
+        .expect("identity must be present");
+    assert_eq!(claims.sub, "user-static");
+}
+
+#[tokio::test]
+async fn step_up_requirement_challenges_with_rfc9470_insufficient_user_authentication() {
+    use authkestra_resource::jwt::Jwks;
+    use authkestra_resource::{StepUpRequirement, INSUFFICIENT_USER_AUTHENTICATION};
+
+    let key = generate_rsa_key(Some("stepup-kid"));
+    let config = ValidationConfig::builder()
+        .static_jwks(Jwks::from_keys(vec![key.jwk.clone()]))
+        .build();
+    let strategy: JwtStrategy<TestClaims> = JwtStrategy::new(config).with_step_up(
+        StepUpRequirement::new()
+            .with_acr_values("urn:authkestra:acr:mfa")
+            .with_max_age(300),
+    );
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    // 1. Token with single-factor acr is refused with insufficient_user_authentication.
+    let aal1_token = sign_token(
+        &key.encoding_key,
+        Some("stepup-kid"),
+        &serde_json::json!({
+            "sub": "user-1",
+            "exp": future_exp(),
+            "acr": "urn:authkestra:acr:1fa",
+            "auth_time": now,
+        }),
+    );
+    let (parts, _) = Request::builder()
+        .header(AUTHORIZATION, format!("Bearer {aal1_token}"))
+        .body(())
+        .unwrap()
+        .into_parts();
+
+    let refusal = strategy
+        .authenticate_with_refusal(&parts)
+        .await
+        .expect_err("1FA token must be refused by MFA step-up requirement");
+    assert_eq!(refusal.status, 401);
+    assert_eq!(refusal.error, INSUFFICIENT_USER_AUTHENTICATION);
+    let www_auth = refusal.www_authenticate().unwrap();
+    assert!(www_auth.contains("error=\"insufficient_user_authentication\""));
+    assert!(www_auth.contains("acr_values=\"urn:authkestra:acr:mfa\""));
+    assert!(www_auth.contains("max_age=\"300\""));
+
+    // 2. Token with MFA acr and fresh auth_time succeeds.
+    let mfa_token = sign_token(
+        &key.encoding_key,
+        Some("stepup-kid"),
+        &serde_json::json!({
+            "sub": "user-1",
+            "exp": future_exp(),
+            "acr": "urn:authkestra:acr:mfa",
+            "auth_time": now,
+        }),
+    );
+    let (parts, _) = Request::builder()
+        .header(AUTHORIZATION, format!("Bearer {mfa_token}"))
+        .body(())
+        .unwrap()
+        .into_parts();
+
+    let claims = strategy
+        .authenticate_with_refusal(&parts)
+        .await
+        .expect("MFA token with fresh auth_time must satisfy step-up")
+        .expect("identity must be present");
+    assert_eq!(claims.sub, "user-1");
+}
