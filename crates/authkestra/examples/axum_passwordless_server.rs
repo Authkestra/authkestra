@@ -13,56 +13,189 @@
 //! - `--serve` or `PORT=<port>`: binds as a standing daemon and logs `READY: listening on http://...`.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use authkestra_engine::auth::magic_link::{MagicLinkAuthMethod, MagicLinkBinding, MagicLinkRecord};
-use authkestra_engine::auth::otp::{OtpAuthMethod, OtpChallenge, OtpChannel};
-use authkestra_engine::auth::recovery::RecoveryCodeAuthMethod;
-use authkestra_engine::auth::session::Session;
-use authkestra_engine::auth::state::{
+use authkestra::core::auth::magic_link::{MagicLinkAuthMethod, MagicLinkBinding, MagicLinkRecord};
+use authkestra::core::auth::otp::{OtpAuthMethod, OtpChallenge, OtpChannel};
+use authkestra::core::auth::recovery::RecoveryCodeAuthMethod;
+use authkestra::core::auth::session::Session;
+use authkestra::core::auth::state::{
     IDENTITY_ATTR_AMR, IDENTITY_ATTR_AUTH_TIME, IDENTITY_ATTR_OTP_CHANNEL,
     IDENTITY_ATTR_STEP_UP_SATISFIED, METHOD_NAME_MAGIC_LINK, METHOD_NAME_RECOVERY_CODE,
     METHOD_NAME_WEBAUTHN,
 };
-use authkestra_engine::auth::webauthn::{derive_user_handle, PasskeyEnrolment, WebAuthnAuthMethod};
-use authkestra_engine::auth::{
+use authkestra::core::auth::webauthn::{derive_user_handle, PasskeyEnrolment, WebAuthnAuthMethod};
+use authkestra::core::auth::{
     AuthError, AuthInput, AuthMethod, AuthResult, CredentialStore, Identity, ReproofRequirement,
 };
-use authkestra_engine::store::memory::{MemoryCredentialStore, MemoryStore};
-use authkestra_engine::store::KvStore;
-use authkestra_engine::{AkEngine, Engine, SessionConfig, TokenManager};
-use axum::extract::{Path, State};
+use authkestra::core::store::memory::{MemoryCredentialStore, MemoryStore};
+use authkestra::core::store::KvStore;
+use authkestra::core::{AkEngine, Engine, SessionConfig, TokenManager};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use url::Url;
 use webauthn_rs::prelude::*;
 
+type ExampleResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 const SESSION_COOKIE_NAME: &str = "ak_session";
 const ML_BINDING_COOKIE_NAME: &str = "ml_binding";
+const PENDING_CEREMONY_TTL: Duration = Duration::from_secs(300);
+const MAX_PENDING_CEREMONIES: usize = 1024;
 
+struct ExpiringEntry<V> {
+    value: V,
+    expires_at: Instant,
+}
+
+/// Bounded in-memory ceremony store that evicts expired entries on access and
+/// enforces a maximum active entry count.
+pub struct ExpiringMap<V> {
+    entries: HashMap<String, ExpiringEntry<V>>,
+    ttl: Duration,
+    max_capacity: usize,
+}
+
+impl<V> Default for ExpiringMap<V> {
+    fn default() -> Self {
+        Self::new(PENDING_CEREMONY_TTL, MAX_PENDING_CEREMONIES)
+    }
+}
+
+impl<V> ExpiringMap<V> {
+    /// Creates a bounded map where each inserted item expires after `ttl`.
+    pub fn new(ttl: Duration, max_capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            ttl,
+            max_capacity,
+        }
+    }
+
+    /// Removes all entries whose deadline has elapsed and returns the number removed.
+    pub fn purge_expired(&mut self, now: Instant) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|_, entry| entry.expires_at > now);
+        before.saturating_sub(self.entries.len())
+    }
+
+    /// Inserts `value` under `key` after purging expired entries, rejecting new keys
+    /// once `max_capacity` is reached.
+    pub fn insert(&mut self, key: String, value: V) -> Result<(), &'static str> {
+        let now = Instant::now();
+        self.purge_expired(now);
+        if !self.entries.contains_key(&key) && self.entries.len() >= self.max_capacity {
+            return Err("pending ceremony capacity exceeded");
+        }
+        self.entries.insert(
+            key,
+            ExpiringEntry {
+                value,
+                expires_at: now + self.ttl,
+            },
+        );
+        Ok(())
+    }
+
+    /// Removes expired entries, then removes and returns `key` if still active.
+    pub fn remove(&mut self, key: &str) -> Option<V> {
+        self.purge_expired(Instant::now());
+        self.entries.remove(key).map(|entry| entry.value)
+    }
+
+    /// Returns `true` when an unexpired entry exists for `key`.
+    pub fn contains_key(&self, key: &str) -> bool {
+        let now = Instant::now();
+        self.entries
+            .get(key)
+            .is_some_and(|entry| entry.expires_at > now)
+    }
+}
+
+/// Shared JSON extractor mapping malformed payloads or missing `Content-Type` headers
+/// to the standard `400 {"error": "invalid_request", ...}` JSON envelope.
+struct ValidatedJson<T>(T);
+
+impl<S, T> FromRequest<S> for ValidatedJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let path = req.uri().path().to_string();
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => Ok(Self(value)),
+            Err(rejection) => {
+                let reason = match &rejection {
+                    JsonRejection::JsonDataError(_) => "json_data_error",
+                    JsonRejection::JsonSyntaxError(_) => "json_syntax_error",
+                    JsonRejection::MissingJsonContentType(_) => "missing_json_content_type",
+                    JsonRejection::BytesRejection(_) => "bytes_rejection",
+                    _ => "json_rejection",
+                };
+                tracing::warn!(
+                    path = %path,
+                    reason = reason,
+                    "rejected malformed JSON request payload"
+                );
+                Err(error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    &rejection.body_text(),
+                ))
+            }
+        }
+    }
+}
+
+/// Shared Axum state for the passwordless authentication reference server.
+///
+/// All stores (`session_store`, `credential_store`, magic-link/OTP challenge stores, and
+/// [`ExpiringMap`] ceremony caches) are ephemeral in-memory implementations sized for a
+/// single local instance; state is lost on process restart. WebAuthn relies on the `localhost`
+/// Relying Party ID and `http://localhost:{port}` origin supplied to [`build_app`].
+///
+/// Out-of-band delivery capture (`test_secrets`) is `None` in [`build_app`] and `--serve`,
+/// and is populated only by the isolated in-process self-test runner.
 #[derive(Clone)]
 pub struct AppState {
+    /// Core Authkestra engine configured with all four passwordless auth methods.
     pub engine: AkEngine,
+    /// Ephemeral in-memory session store.
     pub session_store: Arc<MemoryStore<Session>>,
+    /// Session cookie configuration.
     pub session_config: SessionConfig,
+    /// Ephemeral in-memory credential store for WebAuthn passkeys and recovery codes.
     pub credential_store: MemoryCredentialStore,
+    /// Configured WebAuthn Relying Party instance (`rp_id = "localhost"`).
     pub webauthn: Arc<Webauthn>,
+    /// WebAuthn authentication method facade bound to `credential_store`.
     pub webauthn_method: Arc<WebAuthnAuthMethod<MemoryCredentialStore>>,
+    /// Magic-link authentication method backed by an ephemeral `MemoryStore`.
     pub magic_link_method: Arc<MagicLinkAuthMethod<MemoryStore<MagicLinkRecord>>>,
+    /// OTP authentication method backed by an ephemeral `MemoryStore`.
     pub otp_method: Arc<OtpAuthMethod<MemoryStore<OtpChallenge>>>,
+    /// Recovery-code authentication method backed by `credential_store`.
     pub recovery_method: Arc<RecoveryCodeAuthMethod<MemoryCredentialStore>>,
-    // Ceremony session state for registration & assertion
-    pub passkey_enrolments: Arc<RwLock<HashMap<String, PasskeyEnrolment>>>,
-    pub passkey_authentications: Arc<RwLock<HashMap<String, PasskeyAuthentication>>>,
-    // Test inspection helper to retrieve out-of-band codes without real mailer/SMS
-    pub test_secrets: Arc<RwLock<HashMap<String, String>>>,
+    /// Bounded TTL-expiring passkey registration ceremonies keyed by session ID.
+    pub passkey_enrolments: Arc<RwLock<ExpiringMap<PasskeyEnrolment>>>,
+    /// Bounded TTL-expiring passkey authentication ceremonies keyed by WebAuthn challenge ID.
+    pub passkey_authentications: Arc<RwLock<ExpiringMap<PasskeyAuthentication>>>,
+    /// Self-test-only plaintext delivery sink (`None` in `build_app` and `--serve`).
+    pub test_secrets: Option<Arc<RwLock<HashMap<String, String>>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -180,25 +313,47 @@ struct PasskeyRegisterStartRequest {
     display_name: Option<String>,
 }
 
+async fn purge_expired_passkey_ceremonies(state: &AppState) {
+    let now = Instant::now();
+    let expired_enrolments = state.passkey_enrolments.write().await.purge_expired(now);
+    let expired_auths = state
+        .passkey_authentications
+        .write()
+        .await
+        .purge_expired(now);
+    if expired_enrolments > 0 || expired_auths > 0 {
+        tracing::debug!(
+            expired_enrolments = expired_enrolments,
+            expired_authentications = expired_auths,
+            "purged expired pending passkey ceremonies"
+        );
+    }
+}
+
 async fn passkey_register_start_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<PasskeyRegisterStartRequest>,
+    ValidatedJson(payload): ValidatedJson<PasskeyRegisterStartRequest>,
 ) -> Response {
+    tracing::debug!("handling passkey registration start request");
+    purge_expired_passkey_ceremonies(&state).await;
+
     let username = match payload.username.filter(|u| !u.trim().is_empty()) {
         Some(u) => u,
         None => {
+            tracing::warn!("passkey registration start rejected: missing username");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Field 'username' is required.",
-            )
+            );
         }
     };
 
     let session = match get_authenticated_session(&headers, &state.session_store).await {
         Some(s) => s,
         None => {
+            tracing::warn!("passkey registration start rejected: no active session");
             return error_response(
                 StatusCode::FORBIDDEN,
                 "reproof_required",
@@ -210,7 +365,23 @@ async fn passkey_register_start_handler(
     let gate = ReproofRequirement::new(300);
     let identity = session.identity.clone();
 
+    if username != identity.external_id {
+        tracing::warn!(
+            subject = %identity.external_id,
+            "passkey registration start rejected: username does not match session subject"
+        );
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Field 'username' must match the authenticated session subject identifier.",
+        );
+    }
+
     if let Err(e) = gate.check(&identity) {
+        tracing::warn!(
+            subject = %identity.external_id,
+            "passkey registration start rejected: reproof requirement failed"
+        );
         return error_response(StatusCode::FORBIDDEN, "reproof_required", &e.to_string());
     }
 
@@ -225,26 +396,48 @@ async fn passkey_register_start_handler(
         &display_name,
     ) {
         Ok((challenge, enrolment)) => {
-            state
+            if let Err(msg) = state
                 .passkey_enrolments
                 .write()
                 .await
-                .insert(session.id.clone(), enrolment);
+                .insert(session.id.clone(), enrolment)
+            {
+                tracing::warn!(
+                    subject = %identity.external_id,
+                    "passkey registration start rejected: pending enrolment capacity reached"
+                );
+                return error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", msg);
+            }
 
+            tracing::info!(
+                subject = %identity.external_id,
+                "passkey registration challenge issued"
+            );
             json_response(StatusCode::OK, challenge)
         }
-        Err(e) => error_response(StatusCode::BAD_REQUEST, "invalid_request", &e.to_string()),
+        Err(e) => {
+            tracing::warn!(
+                subject = %identity.external_id,
+                error = %e,
+                "passkey registration start rejected by WebAuthn method"
+            );
+            error_response(StatusCode::BAD_REQUEST, "invalid_request", &e.to_string())
+        }
     }
 }
 
 async fn passkey_register_finish_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(raw_payload): Json<serde_json::Value>,
+    ValidatedJson(raw_payload): ValidatedJson<serde_json::Value>,
 ) -> Response {
+    tracing::debug!("handling passkey registration finish request");
+    purge_expired_passkey_ceremonies(&state).await;
+
     let session = match get_authenticated_session(&headers, &state.session_store).await {
         Some(s) => s,
         None => {
+            tracing::warn!("passkey registration finish rejected: no active session");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -256,6 +449,10 @@ async fn passkey_register_finish_handler(
     let payload: RegisterPublicKeyCredential = match serde_json::from_value(raw_payload) {
         Ok(p) => p,
         Err(e) => {
+            tracing::warn!(
+                subject = %session.identity.external_id,
+                "passkey registration finish rejected: malformed registration credential"
+            );
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -267,6 +464,10 @@ async fn passkey_register_finish_handler(
     let enrolment = match state.passkey_enrolments.write().await.remove(&session.id) {
         Some(e) => e,
         None => {
+            tracing::warn!(
+                subject = %session.identity.external_id,
+                "passkey registration finish rejected: missing or expired enrolment ceremony"
+            );
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -283,6 +484,10 @@ async fn passkey_register_finish_handler(
         Ok(passkey) => {
             let cred_id =
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(passkey.cred_id().as_ref());
+            tracing::info!(
+                subject = %session.identity.external_id,
+                "passkey registration completed"
+            );
             json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -291,11 +496,17 @@ async fn passkey_register_finish_handler(
                 }),
             )
         }
-        Err(e) => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            &e.to_string(),
-        ),
+        Err(e) => {
+            tracing::warn!(
+                subject = %session.identity.external_id,
+                "passkey registration finish rejected: verification failed"
+            );
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                &e.to_string(),
+            )
+        }
     }
 }
 
@@ -306,41 +517,81 @@ struct PasskeyLoginStartRequest {
 
 async fn passkey_login_start_handler(
     State(state): State<AppState>,
-    Json(payload): Json<PasskeyLoginStartRequest>,
+    ValidatedJson(payload): ValidatedJson<PasskeyLoginStartRequest>,
 ) -> Response {
-    let passkeys = if let Some(username) = payload.username {
-        match state
-            .credential_store
-            .get_credentials(&username, METHOD_NAME_WEBAUTHN)
-            .await
-        {
-            Ok(creds) => creds
-                .into_iter()
-                .filter_map(|c| serde_json::from_value::<Passkey>(c).ok())
-                .collect(),
-            Err(_) => vec![],
+    tracing::debug!(
+        has_username = payload.username.is_some(),
+        "handling passkey login start request"
+    );
+    purge_expired_passkey_ceremonies(&state).await;
+
+    let username = match payload.username.filter(|u| !u.trim().is_empty()) {
+        Some(u) => u,
+        None => {
+            tracing::warn!("passkey login start rejected: missing username");
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Field 'username' is required.",
+            );
         }
-    } else {
-        vec![]
+    };
+
+    let passkeys: Vec<Passkey> = match state
+        .credential_store
+        .get_credentials(&username, METHOD_NAME_WEBAUTHN)
+        .await
+    {
+        Ok(creds) => creds
+            .into_iter()
+            .filter_map(|c| serde_json::from_value::<Passkey>(c).ok())
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                subject = %username,
+                error = %e,
+                "failed to query stored WebAuthn credentials for user"
+            );
+            vec![]
+        }
     };
 
     match state.webauthn.start_passkey_authentication(&passkeys) {
         Ok((challenge, auth_state)) => {
             let challenge_id = base64::engine::general_purpose::URL_SAFE_NO_PAD
                 .encode(challenge.public_key.challenge.as_ref());
-            state
+            if let Err(msg) = state
                 .passkey_authentications
                 .write()
                 .await
-                .insert(challenge_id, auth_state);
+                .insert(challenge_id, auth_state)
+            {
+                tracing::warn!(
+                    subject = %username,
+                    "passkey login start rejected: pending authentication capacity reached"
+                );
+                return error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", msg);
+            }
 
+            tracing::info!(
+                subject = %username,
+                credential_count = passkeys.len(),
+                "passkey login challenge issued"
+            );
             json_response(StatusCode::OK, challenge)
         }
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            &format!("Failed to start passkey assertion: {e}"),
-        ),
+        Err(e) => {
+            tracing::error!(
+                subject = %username,
+                error = %e,
+                "failed to start passkey authentication"
+            );
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &format!("Failed to start passkey assertion: {e}"),
+            )
+        }
     }
 }
 
@@ -358,8 +609,11 @@ struct PasskeyLoginFinishFlat {
 
 async fn passkey_login_finish_handler(
     State(state): State<AppState>,
-    Json(payload): Json<PasskeyLoginFinishFlat>,
+    ValidatedJson(payload): ValidatedJson<PasskeyLoginFinishFlat>,
 ) -> Response {
+    tracing::debug!("handling passkey login finish request");
+    purge_expired_passkey_ceremonies(&state).await;
+
     let (user_id, credential_id, client_data_json, authenticator_data, signature, user_handle) =
         if let Some(data) = payload.data {
             (
@@ -384,11 +638,12 @@ async fn passkey_login_finish_handler(
     let user_id = match user_id {
         Some(u) => u,
         None => {
+            tracing::warn!("passkey login finish rejected: missing user_id");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Missing 'user_id' field.",
-            )
+            );
         }
     };
 
@@ -405,6 +660,10 @@ async fn passkey_login_finish_handler(
     let auth_state = match auth_state_opt {
         Some(s) => s,
         None => {
+            tracing::warn!(
+                subject = %user_id,
+                "passkey login finish rejected: missing or expired authentication ceremony"
+            );
             return error_response(
                 StatusCode::UNAUTHORIZED,
                 "invalid_credentials",
@@ -415,12 +674,17 @@ async fn passkey_login_finish_handler(
 
     let auth_state_json = match serde_json::to_string(&auth_state) {
         Ok(j) => j,
-        Err(_) => {
+        Err(e) => {
+            tracing::error!(
+                subject = %user_id,
+                error = %e,
+                "failed to serialize passkey authentication state"
+            );
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Failed to serialize state.",
-            )
+            );
         }
     };
 
@@ -450,6 +714,10 @@ async fn passkey_login_finish_handler(
             );
             let session_id = establish_session(&state, &identity).await;
 
+            tracing::info!(
+                subject = %identity.external_id,
+                "passkey authentication succeeded"
+            );
             let mut resp = json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -460,11 +728,17 @@ async fn passkey_login_finish_handler(
             set_cookie_header(&mut resp, SESSION_COOKIE_NAME, &session_id, Some(86400));
             resp
         }
-        _ => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            "WebAuthn signature verification failed.",
-        ),
+        _ => {
+            tracing::warn!(
+                subject = %user_id,
+                "passkey login finish rejected: assertion verification failed"
+            );
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "WebAuthn signature verification failed.",
+            )
+        }
     }
 }
 
@@ -480,11 +754,17 @@ struct MagicLinkRequestPayload {
 
 async fn magic_link_request_handler(
     State(state): State<AppState>,
-    Json(payload): Json<MagicLinkRequestPayload>,
+    ValidatedJson(payload): ValidatedJson<MagicLinkRequestPayload>,
 ) -> Response {
+    tracing::debug!(
+        has_subject = payload.subject.is_some(),
+        "handling magic-link request"
+    );
+
     let subject = match payload.subject.filter(|s| !s.trim().is_empty()) {
         Some(s) => s,
         None => {
+            tracing::warn!("magic-link request rejected: missing subject");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
@@ -508,12 +788,18 @@ async fn magic_link_request_handler(
     let ttl = Duration::from_secs(900);
     match state.magic_link_method.mint(&subject, ttl, binding).await {
         Ok(token) => {
-            state
-                .test_secrets
-                .write()
-                .await
-                .insert(format!("magic-link:{subject}"), token.secret);
+            if let Some(ref secrets) = state.test_secrets {
+                secrets
+                    .write()
+                    .await
+                    .insert(format!("magic-link:{subject}"), token.secret);
+            }
 
+            tracing::info!(
+                subject = %subject,
+                binding = binding_mode,
+                "magic-link challenge minted"
+            );
             let mut resp = json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -528,11 +814,18 @@ async fn magic_link_request_handler(
             }
             resp
         }
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            &e.to_string(),
-        ),
+        Err(e) => {
+            tracing::error!(
+                subject = %subject,
+                error = %e,
+                "magic-link minting failed"
+            );
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &e.to_string(),
+            )
+        }
     }
 }
 
@@ -547,8 +840,10 @@ struct MagicLinkConsumePayload {
 async fn magic_link_consume_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<MagicLinkConsumePayload>,
+    ValidatedJson(payload): ValidatedJson<MagicLinkConsumePayload>,
 ) -> Response {
+    tracing::debug!("handling magic-link consume request");
+
     let token = payload.token.or_else(|| {
         payload
             .data
@@ -559,11 +854,12 @@ async fn magic_link_consume_handler(
     let token = match token.filter(|t| !t.trim().is_empty()) {
         Some(t) => t,
         None => {
+            tracing::warn!("magic-link consume rejected: missing token");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Missing 'token' field.",
-            )
+            );
         }
     };
 
@@ -591,6 +887,10 @@ async fn magic_link_consume_handler(
             );
             let session_id = establish_session(&state, &identity).await;
 
+            tracing::info!(
+                subject = %identity.external_id,
+                "magic-link authentication succeeded"
+            );
             let mut resp = json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -602,11 +902,14 @@ async fn magic_link_consume_handler(
             set_cookie_header(&mut resp, SESSION_COOKIE_NAME, &session_id, Some(86400));
             resp
         }
-        _ => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            "Invalid or expired magic link.",
-        ),
+        _ => {
+            tracing::warn!("magic-link consume rejected: invalid or expired token");
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "Invalid or expired magic link.",
+            )
+        }
     }
 }
 
@@ -622,27 +925,35 @@ struct OtpRequestPayload {
 
 async fn otp_request_handler(
     State(state): State<AppState>,
-    Json(payload): Json<OtpRequestPayload>,
+    ValidatedJson(payload): ValidatedJson<OtpRequestPayload>,
 ) -> Response {
+    tracing::debug!(
+        has_subject = payload.subject.is_some(),
+        has_channel = payload.channel.is_some(),
+        "handling OTP request"
+    );
+
     let subject = match payload.subject.filter(|s| !s.trim().is_empty()) {
         Some(s) => s,
         None => {
+            tracing::warn!("OTP request rejected: missing subject");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Fields 'subject' and 'channel' are required.",
-            )
+            );
         }
     };
 
     let channel_str = match payload.channel.filter(|c| !c.trim().is_empty()) {
         Some(c) => c,
         None => {
+            tracing::warn!(subject = %subject, "OTP request rejected: missing channel");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Fields 'subject' and 'channel' are required.",
-            )
+            );
         }
     };
 
@@ -650,23 +961,34 @@ async fn otp_request_handler(
         "sms" => OtpChannel::Sms,
         "email" => OtpChannel::Email,
         _ => {
+            tracing::warn!(
+                subject = %subject,
+                channel = %channel_str,
+                "OTP request rejected: unsupported channel"
+            );
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Channel must be 'email' or 'sms'.",
-            )
+            );
         }
     };
 
     let ttl = Duration::from_secs(300);
     match state.otp_method.mint(&subject, ttl, channel, 5).await {
         Ok(otp) => {
-            state
-                .test_secrets
-                .write()
-                .await
-                .insert(format!("otp:{subject}"), otp.code);
+            if let Some(ref secrets) = state.test_secrets {
+                secrets
+                    .write()
+                    .await
+                    .insert(format!("otp:{subject}"), otp.code);
+            }
 
+            tracing::info!(
+                subject = %subject,
+                channel = %channel_str,
+                "OTP challenge minted"
+            );
             json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -677,6 +999,11 @@ async fn otp_request_handler(
             )
         }
         Err(AuthError::Throttled) => {
+            tracing::warn!(
+                subject = %subject,
+                channel = %channel_str,
+                "OTP request throttled during resend cooldown"
+            );
             let mut resp = error_response(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
@@ -686,11 +1013,19 @@ async fn otp_request_handler(
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
             resp
         }
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            &e.to_string(),
-        ),
+        Err(e) => {
+            tracing::error!(
+                subject = %subject,
+                channel = %channel_str,
+                error = %e,
+                "OTP minting failed"
+            );
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &e.to_string(),
+            )
+        }
     }
 }
 
@@ -704,8 +1039,10 @@ struct OtpVerifyPayload {
 
 async fn otp_verify_handler(
     State(state): State<AppState>,
-    Json(payload): Json<OtpVerifyPayload>,
+    ValidatedJson(payload): ValidatedJson<OtpVerifyPayload>,
 ) -> Response {
+    tracing::debug!("handling OTP verification request");
+
     let subject = payload.subject.or_else(|| {
         payload
             .data
@@ -723,14 +1060,16 @@ async fn otp_verify_handler(
     let (subject, code) = match (subject, code) {
         (Some(s), Some(c)) if !s.trim().is_empty() && !c.trim().is_empty() => (s, c),
         _ => {
+            tracing::warn!("OTP verify rejected: missing subject or code");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Fields 'subject' and 'code' are required.",
-            )
+            );
         }
     };
 
+    let subject_for_log = subject.clone();
     let auth_input = AuthInput::Otp { subject, code };
 
     match state.otp_method.authenticate(auth_input).await {
@@ -749,6 +1088,11 @@ async fn otp_verify_handler(
             );
             let session_id = establish_session(&state, &identity).await;
 
+            tracing::info!(
+                subject = %identity.external_id,
+                channel = %channel_name,
+                "OTP authentication succeeded"
+            );
             let mut resp = json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -759,11 +1103,17 @@ async fn otp_verify_handler(
             set_cookie_header(&mut resp, SESSION_COOKIE_NAME, &session_id, Some(86400));
             resp
         }
-        _ => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            "Invalid or expired one-time code.",
-        ),
+        _ => {
+            tracing::warn!(
+                subject = %subject_for_log,
+                "OTP verify rejected: invalid or expired code"
+            );
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "Invalid or expired one-time code.",
+            )
+        }
     }
 }
 
@@ -779,11 +1129,14 @@ struct RecoveryGeneratePayload {
 async fn recovery_generate_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<RecoveryGeneratePayload>,
+    ValidatedJson(payload): ValidatedJson<RecoveryGeneratePayload>,
 ) -> Response {
+    tracing::debug!("handling recovery code generation request");
+
     let session = match get_authenticated_session(&headers, &state.session_store).await {
         Some(s) => s,
         None => {
+            tracing::warn!("recovery code generation rejected: no active session");
             return error_response(
                 StatusCode::FORBIDDEN,
                 "reproof_required",
@@ -794,6 +1147,11 @@ async fn recovery_generate_handler(
 
     let count = payload.count.unwrap_or(10);
     if count == 0 || count > 20 {
+        tracing::warn!(
+            subject = %session.identity.external_id,
+            count = count,
+            "recovery code generation rejected: count out of bounds"
+        );
         return error_response(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -805,6 +1163,10 @@ async fn recovery_generate_handler(
     let identity = session.identity;
 
     if let Err(e) = gate.check(&identity) {
+        tracing::warn!(
+            subject = %identity.external_id,
+            "recovery code generation rejected: reproof requirement failed"
+        );
         return error_response(StatusCode::FORBIDDEN, "reproof_required", &e.to_string());
     }
 
@@ -813,23 +1175,43 @@ async fn recovery_generate_handler(
         .generate(&identity, &gate, count)
         .await
     {
-        Ok(codes) => json_response(
-            StatusCode::OK,
-            serde_json::json!({
-                "codes": codes,
-                "warning": "Save these recovery codes in a secure location. They will not be displayed again."
-            }),
-        ),
-        Err(AuthError::InvalidInput) => error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "Invalid count requested.",
-        ),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            &e.to_string(),
-        ),
+        Ok(codes) => {
+            tracing::info!(
+                subject = %identity.external_id,
+                count = count,
+                "recovery codes generated"
+            );
+            json_response(
+                StatusCode::OK,
+                serde_json::json!({
+                    "codes": codes,
+                    "warning": "Save these recovery codes in a secure location. They will not be displayed again."
+                }),
+            )
+        }
+        Err(AuthError::InvalidInput) => {
+            tracing::warn!(
+                subject = %identity.external_id,
+                "recovery code generation rejected: invalid input"
+            );
+            error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Invalid count requested.",
+            )
+        }
+        Err(e) => {
+            tracing::error!(
+                subject = %identity.external_id,
+                error = %e,
+                "recovery code generation failed"
+            );
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &e.to_string(),
+            )
+        }
     }
 }
 
@@ -843,8 +1225,10 @@ struct RecoveryRedeemPayload {
 
 async fn recovery_redeem_handler(
     State(state): State<AppState>,
-    Json(payload): Json<RecoveryRedeemPayload>,
+    ValidatedJson(payload): ValidatedJson<RecoveryRedeemPayload>,
 ) -> Response {
+    tracing::debug!("handling recovery code redeem request");
+
     let user_id = payload.user_id.or_else(|| {
         payload
             .data
@@ -862,11 +1246,12 @@ async fn recovery_redeem_handler(
     let (user_id, code) = match (user_id, code) {
         (Some(u), Some(c)) if !u.trim().is_empty() && !c.trim().is_empty() => (u, c),
         _ => {
+            tracing::warn!("recovery code redeem rejected: missing user_id or code");
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Fields 'user_id' and 'code' are required.",
-            )
+            );
         }
     };
 
@@ -894,6 +1279,11 @@ async fn recovery_redeem_handler(
 
             let session_id = establish_session(&state, &identity).await;
 
+            tracing::info!(
+                subject = %identity.external_id,
+                remaining_codes = remaining,
+                "recovery code authentication succeeded"
+            );
             let mut resp = json_response(
                 StatusCode::OK,
                 serde_json::json!({
@@ -905,23 +1295,42 @@ async fn recovery_redeem_handler(
             set_cookie_header(&mut resp, SESSION_COOKIE_NAME, &session_id, Some(86400));
             resp
         }
-        _ => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            "Invalid or previously redeemed recovery code.",
-        ),
+        _ => {
+            tracing::warn!(
+                subject = %user_id,
+                "recovery code redeem rejected: invalid or previously redeemed code"
+            );
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "Invalid or previously redeemed recovery code.",
+            )
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Test-Only Delivery Sink (Never expose out-of-band secrets in prod responses)
+// Test-Only Delivery Sink (Mounted only in isolated self-test mode)
 // ---------------------------------------------------------------------------
 
 async fn test_outbox_handler(
     State(state): State<AppState>,
     Path((kind, subject)): Path<(String, String)>,
 ) -> Response {
+    let Some(ref secrets) = state.test_secrets else {
+        tracing::warn!(
+            kind = %kind,
+            "test outbox inspection requested while disabled"
+        );
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Test outbox is disabled outside self-test mode.",
+        );
+    };
+
     if kind != "magic-link" && kind != "otp" {
+        tracing::warn!(kind = %kind, "test outbox rejected unsupported kind");
         return error_response(
             StatusCode::NOT_FOUND,
             "not_found",
@@ -929,20 +1338,26 @@ async fn test_outbox_handler(
         );
     }
     let key = format!("{kind}:{subject}");
-    match state.test_secrets.read().await.get(&key).cloned() {
-        Some(secret) => json_response(
-            StatusCode::OK,
-            serde_json::json!({
-                "kind": kind,
-                "subject": subject,
-                "secret": secret,
-            }),
-        ),
-        None => error_response(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "No captured secret for subject.",
-        ),
+    match secrets.read().await.get(&key).cloned() {
+        Some(secret) => {
+            tracing::debug!(kind = %kind, subject = %subject, "serving test outbox entry");
+            json_response(
+                StatusCode::OK,
+                serde_json::json!({
+                    "kind": kind,
+                    "subject": subject,
+                    "secret": secret,
+                }),
+            )
+        }
+        None => {
+            tracing::debug!(kind = %kind, subject = %subject, "no captured test outbox entry found");
+            error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "No captured secret for subject.",
+            )
+        }
     }
 }
 
@@ -953,10 +1368,21 @@ pub fn resolve_token_secret() -> Vec<u8> {
         if let Ok(val) = std::env::var(var_name) {
             let bytes = val.into_bytes();
             if bytes.len() >= 32 {
+                tracing::debug!(
+                    source = var_name,
+                    "resolved token signing secret from environment"
+                );
                 return bytes;
             }
+            tracing::warn!(
+                source = var_name,
+                "ignoring token secret environment variable shorter than 32 bytes"
+            );
         }
     }
+    tracing::warn!(
+        "AUTHKESTRA_TOKEN_SECRET and JWT_SECRET unset or invalid; generating ephemeral CSPRNG secret"
+    );
     let mut key = vec![0u8; 32];
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(&mut key);
@@ -967,7 +1393,20 @@ pub fn resolve_token_secret() -> Vec<u8> {
 // App Builder
 // ---------------------------------------------------------------------------
 
-pub fn build_app(port: u16) -> (Router, AppState) {
+/// Builds the reference passwordless Axum [`Router`] and its owned [`AppState`].
+///
+/// Constraints and defaults:
+/// - All backing stores are ephemeral in-memory stores that do not persist across restarts.
+/// - WebAuthn binds to RP ID `"localhost"` with origin `http://localhost:{port}`.
+/// - Callers own the returned [`AppState`] alongside the [`Router`] (for inspection/testing
+///   only via public handles).
+/// - Plaintext out-of-band capture (`test_secrets`) is disabled (`None`) and `/_test/outbox/*`
+///   is not mounted in this configuration or in `--serve`.
+pub fn build_app(port: u16) -> ExampleResult<(Router, AppState)> {
+    build_app_with_outbox(port, false)
+}
+
+fn build_app_with_outbox(port: u16, enable_test_outbox: bool) -> ExampleResult<(Router, AppState)> {
     let session_store = Arc::new(MemoryStore::<Session>::new());
     let session_config = SessionConfig {
         cookie_name: SESSION_COOKIE_NAME.to_string(),
@@ -978,13 +1417,11 @@ pub fn build_app(port: u16) -> (Router, AppState) {
     let magic_link_store = MemoryStore::<MagicLinkRecord>::new();
     let otp_store = MemoryStore::<OtpChallenge>::new();
 
-    let origin = Url::parse(&format!("http://localhost:{port}")).expect("valid RP origin");
+    let origin = Url::parse(&format!("http://localhost:{port}"))?;
     let webauthn = Arc::new(
-        WebauthnBuilder::new("localhost", &origin)
-            .expect("valid WebAuthn builder")
+        WebauthnBuilder::new("localhost", &origin)?
             .rp_name("Authkestra Passwordless Demo")
-            .build()
-            .expect("valid WebAuthn instance"),
+            .build()?,
     );
 
     let webauthn_method = Arc::new(WebAuthnAuthMethod::new(
@@ -1025,12 +1462,12 @@ pub fn build_app(port: u16) -> (Router, AppState) {
         magic_link_method,
         otp_method,
         recovery_method,
-        passkey_enrolments: Arc::new(RwLock::new(HashMap::new())),
-        passkey_authentications: Arc::new(RwLock::new(HashMap::new())),
-        test_secrets: Arc::new(RwLock::new(HashMap::new())),
+        passkey_enrolments: Arc::new(RwLock::new(ExpiringMap::default())),
+        passkey_authentications: Arc::new(RwLock::new(ExpiringMap::default())),
+        test_secrets: enable_test_outbox.then(|| Arc::new(RwLock::new(HashMap::new()))),
     };
 
-    let app = Router::new()
+    let mut app = Router::new()
         // Passkey routes
         .route(
             "/auth/passkey/register/start",
@@ -1056,16 +1493,18 @@ pub fn build_app(port: u16) -> (Router, AppState) {
         .route("/auth/otp/verify", post(otp_verify_handler))
         // Recovery routes
         .route("/auth/recovery/generate", post(recovery_generate_handler))
-        .route("/auth/recovery/redeem", post(recovery_redeem_handler))
-        // Demo/CI outbox inspection sink (dev/test only; do not mount in production)
-        .route("/_test/outbox/{kind}/{subject}", get(test_outbox_handler))
-        .with_state(state.clone());
+        .route("/auth/recovery/redeem", post(recovery_redeem_handler));
 
-    (app, state)
+    if enable_test_outbox {
+        // Self-test-only delivery inspection sink (excluded from build_app and --serve).
+        app = app.route("/_test/outbox/{kind}/{subject}", get(test_outbox_handler));
+    }
+
+    Ok((app.with_state(state.clone()), state))
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExampleResult<()> {
     let _ = tracing_subscriber::fmt::try_init();
 
     let args: Vec<String> = std::env::args().collect();
@@ -1076,38 +1515,36 @@ async fn main() {
 
     if serve_flag || port_var.is_some() {
         let port = port_var.unwrap_or(3001);
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-            .await
-            .expect("bind listener");
-        let local_addr = listener.local_addr().unwrap();
-        let (app, _) = build_app(local_addr.port());
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+        let local_addr = listener.local_addr()?;
+        let (app, _) = build_app(local_addr.port())?;
         println!("READY: listening on http://127.0.0.1:{}", local_addr.port());
-        use std::io::Write;
         let _ = std::io::stdout().flush();
         tracing::info!(
             "Passwordless server listening on http://127.0.0.1:{}",
             local_addr.port()
         );
-        axum::serve(listener, app).await.expect("serve app");
+        axum::serve(listener, app).await?;
     } else {
         println!("Running in-memory automated passwordless self-test...");
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("bind ephemeral listener");
-        let addr = listener.local_addr().expect("listener local_addr");
-        let (app, state) = build_app(addr.port());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+        let (app, state) = build_app_with_outbox(addr.port(), true)?;
 
         println!("READY: listening on http://{addr}");
-        use std::io::Write;
         let _ = std::io::stdout().flush();
 
         tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve test app");
+            if let Err(err) = axum::serve(listener, app).await {
+                tracing::error!(error = %err, "in-process passwordless test server stopped with error");
+            }
         });
 
-        run_automated_self_test(addr, state).await;
+        run_automated_self_test(addr, state).await?;
         println!("All passwordless automated tests passed successfully!");
     }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,20 +1567,30 @@ fn extract_set_cookie(resp: &reqwest::Response, name: &str) -> Option<String> {
     None
 }
 
-async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
+async fn run_automated_self_test(addr: SocketAddr, state: AppState) -> ExampleResult<()> {
     let client = reqwest::Client::new();
     let base = format!("http://{addr}");
 
     println!("\n=== Testing Magic Links ===");
+    // 0. Malformed JSON -> 400 invalid_request envelope (ValidatedJson rejection)
+    let malformed_res = client
+        .post(format!("{base}/auth/magic-link/request"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body("{not-valid-json")
+        .send()
+        .await?;
+    assert_eq!(malformed_res.status(), StatusCode::BAD_REQUEST);
+    let malformed_json: serde_json::Value = malformed_res.json().await?;
+    assert_eq!(malformed_json["error"], "invalid_request");
+
     // 1. Missing subject -> 400 Bad Request
     let bad_req = client
         .post(format!("{base}/auth/magic-link/request"))
         .json(&serde_json::json!({}))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(bad_req.status(), StatusCode::BAD_REQUEST);
-    let err_json: serde_json::Value = bad_req.json().await.unwrap();
+    let err_json: serde_json::Value = bad_req.json().await?;
     assert_eq!(err_json["error"], "invalid_request");
 
     // 2. Request valid magic link (response must NOT leak out-of-band secret)
@@ -1154,12 +1601,11 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "binding": "same_context"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(ml_req.status(), StatusCode::OK);
     let ml_binding =
-        extract_set_cookie(&ml_req, ML_BINDING_COOKIE_NAME).expect("ml_binding cookie");
-    let ml_json: serde_json::Value = ml_req.json().await.unwrap();
+        extract_set_cookie(&ml_req, ML_BINDING_COOKIE_NAME).ok_or("missing ml_binding cookie")?;
+    let ml_json: serde_json::Value = ml_req.json().await?;
     assert_eq!(ml_json["status"], "pending");
     assert!(
         ml_json.get("test_token").is_none(),
@@ -1171,14 +1617,12 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "{base}/_test/outbox/magic-link/alice%40example.com"
         ))
         .send()
-        .await
-        .expect("outbox ml")
+        .await?
         .json()
-        .await
-        .unwrap();
+        .await?;
     let test_token = outbox_ml["secret"]
         .as_str()
-        .expect("captured secret")
+        .ok_or("missing captured magic-link secret")?
         .to_string();
 
     // 3. Consume with wrong token -> 401 Unauthorized
@@ -1190,10 +1634,9 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         )
         .json(&serde_json::json!({ "token": "invalid_wrong_token" }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(wrong_consume.status(), StatusCode::UNAUTHORIZED);
-    let err_json: serde_json::Value = wrong_consume.json().await.unwrap();
+    let err_json: serde_json::Value = wrong_consume.json().await?;
     assert_eq!(err_json["error"], "invalid_credentials");
 
     // 4. Consume valid magic link
@@ -1205,10 +1648,9 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         )
         .json(&serde_json::json!({ "token": test_token }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(valid_consume.status(), StatusCode::OK);
-    let consume_json: serde_json::Value = valid_consume.json().await.unwrap();
+    let consume_json: serde_json::Value = valid_consume.json().await?;
     assert_eq!(consume_json["status"], "success");
     assert_eq!(
         consume_json["identity"]["provider_id"],
@@ -1229,8 +1671,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         )
         .json(&serde_json::json!({ "token": test_token }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(replay_consume.status(), StatusCode::UNAUTHORIZED);
 
     println!("\n=== Testing OTP ===");
@@ -1239,8 +1680,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         .post(format!("{base}/auth/otp/request"))
         .json(&serde_json::json!({ "subject": "+15551234567" }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(bad_otp.status(), StatusCode::BAD_REQUEST);
 
     // 2. Request OTP (response must NOT leak out-of-band code)
@@ -1251,10 +1691,9 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "channel": "sms"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(otp_req.status(), StatusCode::OK);
-    let otp_json: serde_json::Value = otp_req.json().await.unwrap();
+    let otp_json: serde_json::Value = otp_req.json().await?;
     assert_eq!(otp_json["status"], "pending");
     assert_eq!(otp_json["channel"], "sms");
     assert!(
@@ -1265,14 +1704,12 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
     let outbox_otp: serde_json::Value = client
         .get(format!("{base}/_test/outbox/otp/%2B15551234567"))
         .send()
-        .await
-        .expect("outbox otp")
+        .await?
         .json()
-        .await
-        .unwrap();
+        .await?;
     let test_code = outbox_otp["secret"]
         .as_str()
-        .expect("captured code")
+        .ok_or("missing captured OTP code")?
         .to_string();
 
     // 3. Request OTP again immediately -> 429 Too Many Requests (cooldown)
@@ -1283,11 +1720,10 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "channel": "sms"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(rate_limited.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(rate_limited.headers().get(header::RETRY_AFTER).is_some());
-    let rate_json: serde_json::Value = rate_limited.json().await.unwrap();
+    let rate_json: serde_json::Value = rate_limited.json().await?;
     assert_eq!(rate_json["error"], "rate_limited");
 
     // 4. Verify wrong OTP code -> 401 Unauthorized
@@ -1298,8 +1734,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "code": "000000"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(wrong_otp_verify.status(), StatusCode::UNAUTHORIZED);
 
     // 5. Verify valid OTP code -> 200 OK
@@ -1310,12 +1745,11 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "code": test_code
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(valid_otp_verify.status(), StatusCode::OK);
-    let session_cookie =
-        extract_set_cookie(&valid_otp_verify, SESSION_COOKIE_NAME).expect("session cookie");
-    let verify_json: serde_json::Value = valid_otp_verify.json().await.unwrap();
+    let session_cookie = extract_set_cookie(&valid_otp_verify, SESSION_COOKIE_NAME)
+        .ok_or("missing session cookie")?;
+    let verify_json: serde_json::Value = valid_otp_verify.json().await?;
     assert_eq!(verify_json["status"], "success");
     assert_eq!(verify_json["identity"]["external_id"], "+15551234567");
     assert_eq!(verify_json["identity"]["attributes"]["otp_channel"], "sms");
@@ -1329,8 +1763,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "code": test_code
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(replay_otp.status(), StatusCode::UNAUTHORIZED);
 
     println!("\n=== Testing Recovery Codes ===");
@@ -1340,10 +1773,9 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         .post(format!("{base}/auth/recovery/generate"))
         .json(&serde_json::json!({ "count": 10 }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(unauthed_gen.status(), StatusCode::FORBIDDEN);
-    let unauth_json: serde_json::Value = unauthed_gen.json().await.unwrap();
+    let unauth_json: serde_json::Value = unauthed_gen.json().await?;
     assert_eq!(unauth_json["error"], "reproof_required");
 
     // 2. Generate with authenticated session (from OTP verification) but count = 0 -> 400
@@ -1355,8 +1787,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         )
         .json(&serde_json::json!({ "count": 0 }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(zero_gen.status(), StatusCode::BAD_REQUEST);
 
     // 3. Generate 10 recovery codes
@@ -1368,13 +1799,15 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         )
         .json(&serde_json::json!({ "count": 10 }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(valid_gen.status(), StatusCode::OK);
-    let gen_json: serde_json::Value = valid_gen.json().await.unwrap();
-    let codes = gen_json["codes"].as_array().expect("codes array");
+    let gen_json: serde_json::Value = valid_gen.json().await?;
+    let codes = gen_json["codes"].as_array().ok_or("missing codes array")?;
     assert_eq!(codes.len(), 10);
-    let first_code = codes[0].as_str().unwrap().to_string();
+    let first_code = codes[0]
+        .as_str()
+        .ok_or("recovery code must be a string")?
+        .to_string();
 
     // 4. Redeem invalid recovery code -> 401
     let bad_redeem = client
@@ -1384,8 +1817,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "code": "ZZZZ-YYYY-XXXX-WWWW"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(bad_redeem.status(), StatusCode::UNAUTHORIZED);
 
     // 5. Redeem valid recovery code (testing normalization: lower case and no hyphens)
@@ -1397,12 +1829,11 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "code": normalized_code
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(valid_redeem.status(), StatusCode::OK);
-    let recovery_session_cookie =
-        extract_set_cookie(&valid_redeem, SESSION_COOKIE_NAME).expect("recovery session cookie");
-    let redeem_json: serde_json::Value = valid_redeem.json().await.unwrap();
+    let recovery_session_cookie = extract_set_cookie(&valid_redeem, SESSION_COOKIE_NAME)
+        .ok_or("missing recovery session cookie")?;
+    let redeem_json: serde_json::Value = valid_redeem.json().await?;
     assert_eq!(redeem_json["status"], "success");
     assert_eq!(
         redeem_json["identity"]["provider_id"],
@@ -1422,8 +1853,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "code": first_code
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(replay_redeem.status(), StatusCode::UNAUTHORIZED);
 
     println!("\n=== Testing Passkeys ===");
@@ -1432,9 +1862,22 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
         .post(format!("{base}/auth/passkey/register/start"))
         .json(&serde_json::json!({ "username": "bob@example.com" }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(unauthed_passkey.status(), StatusCode::FORBIDDEN);
+
+    // 1b. Register start with username != session subject -> 400 invalid_request
+    let mismatched_passkey = client
+        .post(format!("{base}/auth/passkey/register/start"))
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE_NAME}={recovery_session_cookie}"),
+        )
+        .json(&serde_json::json!({ "username": "different-subject@example.com" }))
+        .send()
+        .await?;
+    assert_eq!(mismatched_passkey.status(), StatusCode::BAD_REQUEST);
+    let mismatched_json: serde_json::Value = mismatched_passkey.json().await?;
+    assert_eq!(mismatched_json["error"], "invalid_request");
 
     // 2. Register start with authenticated session -> 200 OK
     let passkey_start = client
@@ -1448,10 +1891,9 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "display_name": "Bob Demo"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(passkey_start.status(), StatusCode::OK);
-    let pk_start_json: serde_json::Value = passkey_start.json().await.unwrap();
+    let pk_start_json: serde_json::Value = passkey_start.json().await?;
     assert!(pk_start_json["publicKey"]["challenge"].as_str().is_some());
 
     // 3. Register finish with invalid data -> 400 invalid_request
@@ -1471,37 +1913,44 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             }
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(invalid_finish.status(), StatusCode::BAD_REQUEST);
-    let inv_err: serde_json::Value = invalid_finish.json().await.unwrap();
+    let inv_err: serde_json::Value = invalid_finish.json().await?;
     assert_eq!(inv_err["error"], "invalid_request");
+
+    // 3b. Passkey login start without username -> 400 invalid_request
+    let missing_username_login = client
+        .post(format!("{base}/auth/passkey/login/start"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+    assert_eq!(missing_username_login.status(), StatusCode::BAD_REQUEST);
+    let missing_user_json: serde_json::Value = missing_username_login.json().await?;
+    assert_eq!(missing_user_json["error"], "invalid_request");
 
     // 4. Passkey login start (two concurrent ceremonies) -> 200 OK
     let login_start_1 = client
         .post(format!("{base}/auth/passkey/login/start"))
         .json(&serde_json::json!({ "username": "+15551234567" }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(login_start_1.status(), StatusCode::OK);
-    let login_start_1_json: serde_json::Value = login_start_1.json().await.unwrap();
+    let login_start_1_json: serde_json::Value = login_start_1.json().await?;
     let challenge_1 = login_start_1_json["publicKey"]["challenge"]
         .as_str()
-        .expect("challenge 1")
+        .ok_or("missing challenge 1")?
         .to_string();
 
     let login_start_2 = client
         .post(format!("{base}/auth/passkey/login/start"))
         .json(&serde_json::json!({ "username": "+15551234567" }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(login_start_2.status(), StatusCode::OK);
-    let login_start_2_json: serde_json::Value = login_start_2.json().await.unwrap();
+    let login_start_2_json: serde_json::Value = login_start_2.json().await?;
     let challenge_2 = login_start_2_json["publicKey"]["challenge"]
         .as_str()
-        .expect("challenge 2")
+        .ok_or("missing challenge 2")?
         .to_string();
     assert_ne!(challenge_1, challenge_2);
 
@@ -1525,8 +1974,7 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "signature": "dGVzdF9zaWduYXR1cmU"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(login_finish.status(), StatusCode::UNAUTHORIZED);
     {
         let pending = state.passkey_authentications.read().await;
@@ -1551,7 +1999,17 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) {
             "signature": "dGVzdF9zaWduYXR1cmU"
         }))
         .send()
-        .await
-        .expect("req");
+        .await?;
     assert_eq!(login_finish_missing_chal.status(), StatusCode::UNAUTHORIZED);
+
+    // 7. ExpiringMap enforces both capacity limit and TTL expiry cleanup
+    let mut bounded = ExpiringMap::new(Duration::from_millis(15), 2);
+    assert!(bounded.insert("k1".to_string(), 1).is_ok());
+    assert!(bounded.insert("k2".to_string(), 2).is_ok());
+    assert!(bounded.insert("k3".to_string(), 3).is_err());
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(bounded.remove("k1").is_none());
+    assert!(bounded.insert("k3".to_string(), 3).is_ok());
+
+    Ok(())
 }

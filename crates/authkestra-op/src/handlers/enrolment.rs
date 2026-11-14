@@ -282,9 +282,20 @@ pub async fn handle_reissue_start(
     if let Some(role) = existing_role {
         attr_map.insert("role".to_string(), Value::String(role.to_string()));
     } else {
-        attr_map
-            .entry("role".to_string())
-            .or_insert_with(|| Value::String(KeyRole::Ambient.as_str().to_string()));
+        if let Some(provider_role) = attr_map.get("role").and_then(Value::as_str) {
+            if provider_role != KeyRole::Ambient.as_str() {
+                tracing::warn!(
+                    subject = %subject,
+                    principal_id = %principal_id,
+                    provider_role = %provider_role,
+                    "original attestation lacked att.role; coercing provider-supplied role to ambient on reissue"
+                );
+            }
+        }
+        attr_map.insert(
+            "role".to_string(),
+            Value::String(KeyRole::Ambient.as_str().to_string()),
+        );
     }
     attr_map.insert("status".to_string(), Value::String("active".to_string()));
     let attributes = Value::Object(attr_map);
@@ -1902,5 +1913,71 @@ mod tests {
         let att = claims.extra.get("att").unwrap();
         assert_eq!(att["role"], "user_present");
         assert_eq!(att["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn reissue_without_existing_role_forces_ambient_even_if_provider_returns_user_present() {
+        let challenges = MemoryStore::<EnrolmentChallenge>::new();
+        let tokens = test_tokens();
+        let config = test_config();
+        let key = generate_test_key();
+        let parsed_jwk = parse_public_jwk(&key.public_jwk).unwrap();
+        let jkt = compute_cnf_jkt(&parsed_jwk).unwrap();
+
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("cnf".to_string(), serde_json::json!({ "jkt": jkt }));
+        extra.insert(
+            "did".to_string(),
+            Value::String("device-no-role".to_string()),
+        );
+        extra.insert(
+            "principal_type".to_string(),
+            Value::String("device".to_string()),
+        );
+        extra.insert("att".to_string(), serde_json::json!({ "status": "active" }));
+
+        let legacy_attestation = tokens
+            .issue_custom_token("user-no-role".to_string(), 3600, "webank-attest+jws", extra)
+            .unwrap();
+
+        let status = StaticStatus(Some(serde_json::json!({
+            "role": "user_present",
+            "kyc_level": 2,
+        })));
+        let reissue_start = handle_reissue_start(
+            ReissueStartRequest {
+                attestation: legacy_attestation,
+                public_jwk: key.public_jwk.clone(),
+                requested_cnf_jkt: None,
+            },
+            &tokens,
+            Some(&status),
+            &challenges,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reissue_sig = sign_challenge(&key, &reissue_start.challenge);
+        let reissued = handle_complete_challenge(
+            CompleteChallengeRequest {
+                challenge: reissue_start.challenge,
+                challenge_signature: reissue_sig,
+            },
+            &challenges,
+            &tokens,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let claims = tokens.validate_token(&reissued.attestation, None).unwrap();
+        let att = claims.extra.get("att").unwrap();
+        assert_eq!(
+            att["role"], "ambient",
+            "missing att.role in original attestation must default to ambient even if status provider supplies user_present"
+        );
+        assert_eq!(att["status"], "active");
+        assert_eq!(att["kyc_level"], 2);
     }
 }

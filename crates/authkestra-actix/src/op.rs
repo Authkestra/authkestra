@@ -407,6 +407,10 @@ pub async fn actix_device_verify_handler(
 /// which answers `403 {"error": "device_revoked"}` per RFC-014 §6).
 fn attestation_error_response(err: OpError) -> HttpResponse {
     if matches!(&err, OpError::PrincipalRevoked) {
+        tracing::warn!(
+            error = "device_revoked",
+            "attestation renewal refused: principal is revoked"
+        );
         return HttpResponse::build(actix_web::http::StatusCode::FORBIDDEN).json(
             serde_json::json!({
                 "error": "device_revoked",

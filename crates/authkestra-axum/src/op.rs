@@ -513,6 +513,10 @@ where
 /// which answers `403 {"error": "device_revoked"}` per RFC-014 §6).
 fn attestation_error_response(err: OpError) -> Response {
     if matches!(&err, OpError::PrincipalRevoked) {
+        tracing::warn!(
+            error = "device_revoked",
+            "attestation renewal refused: principal is revoked"
+        );
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({

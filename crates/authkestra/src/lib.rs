@@ -76,6 +76,11 @@ pub use authkestra_actix as actix;
 #[cfg(feature = "op")]
 pub use authkestra_op as op;
 
+/// Resource server validation and enforcement (`Guard`, `JwtStrategy`,
+/// `ValidationConfig`, `DpopReplayStore`, and RFC 9470 `StepUpRequirement`).
+#[cfg(feature = "resource")]
+pub use authkestra_resource as resource;
+
 /// Device and service signatures: `DeviceIdentity`, `SignedRequest` and the
 /// verification entry points the adapters' `devsig` layers wrap.
 #[cfg(feature = "devsig")]

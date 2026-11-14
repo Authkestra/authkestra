@@ -282,7 +282,7 @@ Content-Type: application/json
 
 ### 2.4 Authentication Start: `POST /auth/passkey/login/start`
 
-Initiates passkey assertion for either discoverable ("usernameless") credentials or account-specified login.
+Initiates passkey assertion for an account-specified login.
 
 #### HTTP Request
 - **Method**: `POST`
@@ -297,25 +297,28 @@ Initiates passkey assertion for either discoverable ("usernameless") credentials
   "properties": {
     "username": {
       "type": "string",
-      "description": "Optional account username/email. If omitted, triggers discoverable credential login."
+      "description": "Required account identifier matching the subject external_id stored during registration."
     }
-  }
+  },
+  "required": ["username"]
 }
 ```
 
-#### Example Request (Discoverable)
+#### Example Request
 ```http
 POST /auth/passkey/login/start HTTP/1.1
 Host: auth.example.com
 Content-Type: application/json
 
-{}
+{
+  "username": "alice@example.com"
+}
 ```
 
 #### Server Processing & Session State
-1. If `username` provided, queries store for enrolled credentials: `store.get_credentials(user_id, "webauthn")`. If discoverable, empty credential list allows any resident key for the RP.
+1. Requires non-empty `username` (`400 invalid_request` if missing or blank) and queries store for enrolled credentials: `store.get_credentials(user_id, "webauthn")`.
 2. Invokes `webauthn.start_passkey_authentication(&passkeys)`.
-3. Saves `PasskeyAuthentication` state in server session.
+3. Saves `PasskeyAuthentication` state in a bounded TTL ceremony store.
 
 #### HTTP Response (Success)
 - **Status Code**: `200 OK`
