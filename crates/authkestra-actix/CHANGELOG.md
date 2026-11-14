@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1](https://github.com/Authkestra/authkestra/compare/authkestra-actix-v0.15.0...authkestra-actix-v0.15.1) - 2026-11-14
+
+### Added
+
+- *(op,resource,devsig)* CrateStack & Fespalier interop + RFC 9470/9449 resource challenges (#427, #439, #445, #446, #447) ([#448](https://github.com/Authkestra/authkestra/pull/448))
+
 ## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-actix-v0.14.0...authkestra-actix-v0.15.0) - 2026-11-07
 
 ### Added
