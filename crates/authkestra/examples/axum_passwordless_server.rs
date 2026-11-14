@@ -9,12 +9,17 @@
 //!
 //! ## Execution Modes:
 //! - Default / no args: executes automated end-to-end self-test verifying all flows, HTTP shapes,
-//!   single-use guarantees, and wire error codes (400, 401, 403, 429).
+//!   single-use guarantees, wire error codes (400, 401, 403, 429, 503), and server-mode file delivery.
 //! - `--serve` or `PORT=<port>`: binds as a standing daemon and logs `READY: listening on http://...`.
+//!   Server mode never mounts `/_test/outbox/*`; pass `--delivery-file <path>` (or
+//!   `AUTHKESTRA_DELIVERY_FILE=<path>`) for owner-only local file delivery, `--local-delivery` (or
+//!   `AUTHKESTRA_LOCAL_DELIVERY=1`) for interactive stderr delivery, or wire a custom
+//!   [`PasswordlessDelivery`] via [`build_app_with_delivery`].
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,7 +48,7 @@ use axum::{Json, Router};
 use base64::Engine as _;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use url::Url;
 use webauthn_rs::prelude::*;
 
@@ -161,15 +166,235 @@ where
     }
 }
 
+/// Out-of-band delivery backend for freshly minted magic-link secrets and OTP codes.
+///
+/// Implement this trait to integrate a real email/SMS provider via [`build_app_with_delivery`].
+/// Standalone local runs can also use [`LocalFileDelivery`] (`AUTHKESTRA_DELIVERY_FILE` /
+/// `--delivery-file`) or [`LocalStderrDelivery`] (`AUTHKESTRA_LOCAL_DELIVERY=1` /
+/// `--local-delivery`). Never write secrets to HTTP responses or `tracing` logs.
+#[async_trait::async_trait]
+pub trait PasswordlessDelivery: Send + Sync {
+    /// Returns `true` when this backend can deliver challenges out of band.
+    fn is_configured(&self) -> bool {
+        true
+    }
+
+    /// Delivers a freshly minted magic-link token to `subject`.
+    async fn deliver_magic_link(
+        &self,
+        subject: &str,
+        token: &str,
+        expires_at: i64,
+    ) -> Result<(), String>;
+
+    /// Delivers a freshly minted one-time passcode (`code`) to `subject` over `channel`.
+    async fn deliver_otp(
+        &self,
+        subject: &str,
+        channel: &str,
+        code: &str,
+        expires_at: i64,
+    ) -> Result<(), String>;
+}
+
+/// Appends delivered challenges as newline-delimited JSON objects to an owner-only (`0600`) file.
+///
+/// Intended for isolated local testing or automation against `--serve` without exposing HTTP
+/// outbox endpoints.
+pub struct LocalFileDelivery {
+    path: PathBuf,
+    write_lock: Mutex<()>,
+}
+
+impl LocalFileDelivery {
+    /// Creates a delivery sink that appends challenges as JSON lines to `path`.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            write_lock: Mutex::new(()),
+        }
+    }
+
+    async fn append_record(&self, record: serde_json::Value) -> Result<(), String> {
+        let mut line = serde_json::to_string(&record)
+            .map_err(|e| format!("failed to serialize delivery record: {e}"))?;
+        line.push('\n');
+
+        let _guard = self.write_lock.lock().await;
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+            let mut opts = std::fs::OpenOptions::new();
+            opts.create(true).append(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&path)?;
+            file.write_all(line.as_bytes())?;
+            file.flush()?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("delivery writer task failed: {e}"))?
+        .map_err(|e| format!("failed to write delivery record: {e}"))
+    }
+}
+
+#[async_trait::async_trait]
+impl PasswordlessDelivery for LocalFileDelivery {
+    async fn deliver_magic_link(
+        &self,
+        subject: &str,
+        token: &str,
+        expires_at: i64,
+    ) -> Result<(), String> {
+        self.append_record(serde_json::json!({
+            "kind": "magic-link",
+            "subject": subject,
+            "secret": token,
+            "expires_at": expires_at,
+        }))
+        .await
+    }
+
+    async fn deliver_otp(
+        &self,
+        subject: &str,
+        channel: &str,
+        code: &str,
+        expires_at: i64,
+    ) -> Result<(), String> {
+        self.append_record(serde_json::json!({
+            "kind": "otp",
+            "subject": subject,
+            "channel": channel,
+            "secret": code,
+            "expires_at": expires_at,
+        }))
+        .await
+    }
+}
+
+/// Prints delivered challenges to standard error for explicitly enabled interactive local sessions.
+///
+/// Activated only via `--local-delivery` or `AUTHKESTRA_LOCAL_DELIVERY=1` so server mode never
+/// emits secrets silently when running unattended.
+#[derive(Default)]
+pub struct LocalStderrDelivery;
+
+#[async_trait::async_trait]
+impl PasswordlessDelivery for LocalStderrDelivery {
+    async fn deliver_magic_link(
+        &self,
+        subject: &str,
+        token: &str,
+        expires_at: i64,
+    ) -> Result<(), String> {
+        eprintln!(
+            "[LOCAL DELIVERY] magic-link subject={subject} token={token} expires_at={expires_at}"
+        );
+        Ok(())
+    }
+
+    async fn deliver_otp(
+        &self,
+        subject: &str,
+        channel: &str,
+        code: &str,
+        expires_at: i64,
+    ) -> Result<(), String> {
+        eprintln!(
+            "[LOCAL DELIVERY] otp channel={channel} subject={subject} code={code} expires_at={expires_at}"
+        );
+        Ok(())
+    }
+}
+
+struct UnconfiguredDelivery;
+
+#[async_trait::async_trait]
+impl PasswordlessDelivery for UnconfiguredDelivery {
+    fn is_configured(&self) -> bool {
+        false
+    }
+
+    async fn deliver_magic_link(
+        &self,
+        _subject: &str,
+        _token: &str,
+        _expires_at: i64,
+    ) -> Result<(), String> {
+        Err(
+            "No out-of-band delivery backend is configured. Provide a PasswordlessDelivery via build_app_with_delivery, set AUTHKESTRA_DELIVERY_FILE / --delivery-file, or pass --local-delivery.".to_string(),
+        )
+    }
+
+    async fn deliver_otp(
+        &self,
+        _subject: &str,
+        _channel: &str,
+        _code: &str,
+        _expires_at: i64,
+    ) -> Result<(), String> {
+        Err(
+            "No out-of-band delivery backend is configured. Provide a PasswordlessDelivery via build_app_with_delivery, set AUTHKESTRA_DELIVERY_FILE / --delivery-file, or pass --local-delivery.".to_string(),
+        )
+    }
+}
+
+#[derive(Clone, Default)]
+struct SelfTestOutboxDelivery {
+    secrets: Arc<RwLock<HashMap<String, String>>>,
+}
+
+#[async_trait::async_trait]
+impl PasswordlessDelivery for SelfTestOutboxDelivery {
+    async fn deliver_magic_link(
+        &self,
+        subject: &str,
+        token: &str,
+        _expires_at: i64,
+    ) -> Result<(), String> {
+        self.secrets
+            .write()
+            .await
+            .insert(format!("magic-link:{subject}"), token.to_string());
+        Ok(())
+    }
+
+    async fn deliver_otp(
+        &self,
+        subject: &str,
+        _channel: &str,
+        code: &str,
+        _expires_at: i64,
+    ) -> Result<(), String> {
+        self.secrets
+            .write()
+            .await
+            .insert(format!("otp:{subject}"), code.to_string());
+        Ok(())
+    }
+}
+
 /// Shared Axum state for the passwordless authentication reference server.
 ///
 /// All stores (`session_store`, `credential_store`, magic-link/OTP challenge stores, and
 /// [`ExpiringMap`] ceremony caches) are ephemeral in-memory implementations sized for a
 /// single local instance; state is lost on process restart. WebAuthn relies on the `localhost`
-/// Relying Party ID and `http://localhost:{port}` origin supplied to [`build_app`].
+/// Relying Party ID and `http://localhost:{port}` origin supplied to [`build_app`] or
+/// [`build_app_with_delivery`].
 ///
-/// Out-of-band delivery capture (`test_secrets`) is `None` in [`build_app`] and `--serve`,
-/// and is populated only by the isolated in-process self-test runner.
+/// Challenge delivery goes through `delivery` ([`PasswordlessDelivery`]). [`build_app`] checks
+/// `AUTHKESTRA_DELIVERY_FILE` / `AUTHKESTRA_LOCAL_DELIVERY` and otherwise fails closed with HTTP
+/// `503 delivery_unavailable` instead of silently discarding challenges; the `/_test/outbox/*`
+/// inspection route is mounted only by the isolated in-process self-test runner.
 #[derive(Clone)]
 pub struct AppState {
     /// Core Authkestra engine configured with all four passwordless auth methods.
@@ -194,8 +419,8 @@ pub struct AppState {
     pub passkey_enrolments: Arc<RwLock<ExpiringMap<PasskeyEnrolment>>>,
     /// Bounded TTL-expiring passkey authentication ceremonies keyed by WebAuthn challenge ID.
     pub passkey_authentications: Arc<RwLock<ExpiringMap<PasskeyAuthentication>>>,
-    /// Self-test-only plaintext delivery sink (`None` in `build_app` and `--serve`).
-    pub test_secrets: Option<Arc<RwLock<HashMap<String, String>>>>,
+    /// Out-of-band delivery backend for minted magic-link secrets and OTP codes.
+    pub delivery: Arc<dyn PasswordlessDelivery>,
 }
 
 // ---------------------------------------------------------------------------
@@ -773,6 +998,15 @@ async fn magic_link_request_handler(
         }
     };
 
+    if !state.delivery.is_configured() {
+        tracing::warn!(subject = %subject, "magic-link request rejected: delivery backend unconfigured");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "delivery_unavailable",
+            "No out-of-band delivery backend is configured. Provide PasswordlessDelivery via build_app_with_delivery, set AUTHKESTRA_DELIVERY_FILE / --delivery-file, or pass --local-delivery.",
+        );
+    }
+
     let binding_mode = payload.binding.as_deref().unwrap_or("same_context");
 
     let (binding, cookie_nonce) = match binding_mode {
@@ -788,17 +1022,27 @@ async fn magic_link_request_handler(
     let ttl = Duration::from_secs(900);
     match state.magic_link_method.mint(&subject, ttl, binding).await {
         Ok(token) => {
-            if let Some(ref secrets) = state.test_secrets {
-                secrets
-                    .write()
-                    .await
-                    .insert(format!("magic-link:{subject}"), token.secret);
+            if let Err(err) = state
+                .delivery
+                .deliver_magic_link(&subject, &token.secret, token.expires_at)
+                .await
+            {
+                tracing::error!(
+                    subject = %subject,
+                    error = %err,
+                    "magic-link delivery failed"
+                );
+                return error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "delivery_unavailable",
+                    &err,
+                );
             }
 
             tracing::info!(
                 subject = %subject,
                 binding = binding_mode,
-                "magic-link challenge minted"
+                "magic-link challenge minted and queued for delivery"
             );
             let mut resp = json_response(
                 StatusCode::OK,
@@ -974,20 +1218,44 @@ async fn otp_request_handler(
         }
     };
 
+    if !state.delivery.is_configured() {
+        tracing::warn!(
+            subject = %subject,
+            channel = %channel_str,
+            "OTP request rejected: delivery backend unconfigured"
+        );
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "delivery_unavailable",
+            "No out-of-band delivery backend is configured. Provide PasswordlessDelivery via build_app_with_delivery, set AUTHKESTRA_DELIVERY_FILE / --delivery-file, or pass --local-delivery.",
+        );
+    }
+
     let ttl = Duration::from_secs(300);
     match state.otp_method.mint(&subject, ttl, channel, 5).await {
         Ok(otp) => {
-            if let Some(ref secrets) = state.test_secrets {
-                secrets
-                    .write()
-                    .await
-                    .insert(format!("otp:{subject}"), otp.code);
+            if let Err(err) = state
+                .delivery
+                .deliver_otp(&subject, &channel_str, &otp.code, otp.expires_at)
+                .await
+            {
+                tracing::error!(
+                    subject = %subject,
+                    channel = %channel_str,
+                    error = %err,
+                    "OTP delivery failed"
+                );
+                return error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "delivery_unavailable",
+                    &err,
+                );
             }
 
             tracing::info!(
                 subject = %subject,
                 channel = %channel_str,
-                "OTP challenge minted"
+                "OTP challenge minted and queued for delivery"
             );
             json_response(
                 StatusCode::OK,
@@ -1314,21 +1582,9 @@ async fn recovery_redeem_handler(
 // ---------------------------------------------------------------------------
 
 async fn test_outbox_handler(
-    State(state): State<AppState>,
+    State(outbox): State<SelfTestOutboxDelivery>,
     Path((kind, subject)): Path<(String, String)>,
 ) -> Response {
-    let Some(ref secrets) = state.test_secrets else {
-        tracing::warn!(
-            kind = %kind,
-            "test outbox inspection requested while disabled"
-        );
-        return error_response(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "Test outbox is disabled outside self-test mode.",
-        );
-    };
-
     if kind != "magic-link" && kind != "otp" {
         tracing::warn!(kind = %kind, "test outbox rejected unsupported kind");
         return error_response(
@@ -1338,7 +1594,7 @@ async fn test_outbox_handler(
         );
     }
     let key = format!("{kind}:{subject}");
-    match secrets.read().await.get(&key).cloned() {
+    match outbox.secrets.read().await.get(&key).cloned() {
         Some(secret) => {
             tracing::debug!(kind = %kind, subject = %subject, "serving test outbox entry");
             json_response(
@@ -1389,24 +1645,78 @@ pub fn resolve_token_secret() -> Vec<u8> {
     key
 }
 
+fn resolve_delivery_from_env() -> Arc<dyn PasswordlessDelivery> {
+    if let Ok(path) = std::env::var("AUTHKESTRA_DELIVERY_FILE") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Arc::new(LocalFileDelivery::new(trimmed));
+        }
+    }
+    if std::env::var("AUTHKESTRA_LOCAL_DELIVERY")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return Arc::new(LocalStderrDelivery);
+    }
+    Arc::new(UnconfiguredDelivery)
+}
+
+fn parse_cli_delivery(args: &[String]) -> ExampleResult<Arc<dyn PasswordlessDelivery>> {
+    let mut idx = 1;
+    while idx < args.len() {
+        let arg = &args[idx];
+        if arg == "--delivery-file" {
+            let path = args
+                .get(idx + 1)
+                .ok_or("--delivery-file requires a path argument")?;
+            return Ok(Arc::new(LocalFileDelivery::new(path)));
+        }
+        if let Some(path) = arg.strip_prefix("--delivery-file=") {
+            if path.trim().is_empty() {
+                return Err("--delivery-file= requires a non-empty path".into());
+            }
+            return Ok(Arc::new(LocalFileDelivery::new(path)));
+        }
+        if arg == "--local-delivery" {
+            return Ok(Arc::new(LocalStderrDelivery));
+        }
+        idx += 1;
+    }
+    Ok(resolve_delivery_from_env())
+}
+
 // ---------------------------------------------------------------------------
 // App Builder
 // ---------------------------------------------------------------------------
 
-/// Builds the reference passwordless Axum [`Router`] and its owned [`AppState`].
+/// Builds the reference passwordless Axum [`Router`] and its owned [`AppState`] using
+/// environment-configured challenge delivery.
+///
+/// Delivery backend precedence:
+/// 1. `AUTHKESTRA_DELIVERY_FILE=<path>` -> [`LocalFileDelivery`] (`0600` NDJSON file).
+/// 2. `AUTHKESTRA_LOCAL_DELIVERY=1` -> [`LocalStderrDelivery`] (interactive dev stderr).
+/// 3. Otherwise -> fail-closed `503 delivery_unavailable` until [`build_app_with_delivery`] or
+///    local delivery is configured.
 ///
 /// Constraints and defaults:
 /// - All backing stores are ephemeral in-memory stores that do not persist across restarts.
 /// - WebAuthn binds to RP ID `"localhost"` with origin `http://localhost:{port}`.
 /// - Callers own the returned [`AppState`] alongside the [`Router`] (for inspection/testing
 ///   only via public handles).
-/// - Plaintext out-of-band capture (`test_secrets`) is disabled (`None`) and `/_test/outbox/*`
-///   is not mounted in this configuration or in `--serve`.
+/// - `/_test/outbox/*` is never mounted by [`build_app`] or `--serve`.
 pub fn build_app(port: u16) -> ExampleResult<(Router, AppState)> {
-    build_app_with_outbox(port, false)
+    build_app_with_delivery(port, resolve_delivery_from_env())
 }
 
-fn build_app_with_outbox(port: u16, enable_test_outbox: bool) -> ExampleResult<(Router, AppState)> {
+/// Builds the reference passwordless Axum [`Router`] and its owned [`AppState`] with a custom
+/// [`PasswordlessDelivery`] backend.
+///
+/// `/_test/outbox/*` is never mounted here; callers handle out-of-band magic-link and OTP
+/// challenge delivery exclusively through `delivery`.
+pub fn build_app_with_delivery(
+    port: u16,
+    delivery: Arc<dyn PasswordlessDelivery>,
+) -> ExampleResult<(Router, AppState)> {
     let session_store = Arc::new(MemoryStore::<Session>::new());
     let session_config = SessionConfig {
         cookie_name: SESSION_COOKIE_NAME.to_string(),
@@ -1464,10 +1774,10 @@ fn build_app_with_outbox(port: u16, enable_test_outbox: bool) -> ExampleResult<(
         recovery_method,
         passkey_enrolments: Arc::new(RwLock::new(ExpiringMap::default())),
         passkey_authentications: Arc::new(RwLock::new(ExpiringMap::default())),
-        test_secrets: enable_test_outbox.then(|| Arc::new(RwLock::new(HashMap::new()))),
+        delivery,
     };
 
-    let mut app = Router::new()
+    let app = Router::new()
         // Passkey routes
         .route(
             "/auth/passkey/register/start",
@@ -1495,12 +1805,19 @@ fn build_app_with_outbox(port: u16, enable_test_outbox: bool) -> ExampleResult<(
         .route("/auth/recovery/generate", post(recovery_generate_handler))
         .route("/auth/recovery/redeem", post(recovery_redeem_handler));
 
-    if enable_test_outbox {
-        // Self-test-only delivery inspection sink (excluded from build_app and --serve).
-        app = app.route("/_test/outbox/{kind}/{subject}", get(test_outbox_handler));
-    }
-
     Ok((app.with_state(state.clone()), state))
+}
+
+fn build_app_with_outbox(port: u16) -> ExampleResult<(Router, AppState)> {
+    let outbox = SelfTestOutboxDelivery::default();
+    let (router, state) = build_app_with_delivery(port, Arc::new(outbox.clone()))?;
+    // Self-test-only delivery inspection sink (never mounted in build_app / --serve).
+    let router = router.merge(
+        Router::new()
+            .route("/_test/outbox/{kind}/{subject}", get(test_outbox_handler))
+            .with_state(outbox),
+    );
+    Ok((router, state))
 }
 
 #[tokio::main]
@@ -1515,9 +1832,15 @@ async fn main() -> ExampleResult<()> {
 
     if serve_flag || port_var.is_some() {
         let port = port_var.unwrap_or(3001);
+        let delivery = parse_cli_delivery(&args)?;
+        if !delivery.is_configured() {
+            tracing::warn!(
+                "No passwordless delivery backend configured; magic-link and OTP requests will return 503 delivery_unavailable until --delivery-file <path>, AUTHKESTRA_DELIVERY_FILE, --local-delivery, or AUTHKESTRA_LOCAL_DELIVERY=1 is set."
+            );
+        }
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
         let local_addr = listener.local_addr()?;
-        let (app, _) = build_app(local_addr.port())?;
+        let (app, _) = build_app_with_delivery(local_addr.port(), delivery)?;
         println!("READY: listening on http://127.0.0.1:{}", local_addr.port());
         let _ = std::io::stdout().flush();
         tracing::info!(
@@ -1529,7 +1852,7 @@ async fn main() -> ExampleResult<()> {
         println!("Running in-memory automated passwordless self-test...");
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let addr = listener.local_addr()?;
-        let (app, state) = build_app_with_outbox(addr.port(), true)?;
+        let (app, state) = build_app_with_outbox(addr.port())?;
 
         println!("READY: listening on http://{addr}");
         let _ = std::io::stdout().flush();
@@ -2002,14 +2325,110 @@ async fn run_automated_self_test(addr: SocketAddr, state: AppState) -> ExampleRe
         .await?;
     assert_eq!(login_finish_missing_chal.status(), StatusCode::UNAUTHORIZED);
 
-    // 7. ExpiringMap enforces both capacity limit and TTL expiry cleanup
-    let mut bounded = ExpiringMap::new(Duration::from_millis(15), 2);
+    // 7. ExpiringMap enforces both capacity limit and deterministic TTL expiry cleanup
+    let mut bounded = ExpiringMap::new(Duration::from_secs(300), 2);
     assert!(bounded.insert("k1".to_string(), 1).is_ok());
     assert!(bounded.insert("k2".to_string(), 2).is_ok());
     assert!(bounded.insert("k3".to_string(), 3).is_err());
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    let evicted = bounded.purge_expired(Instant::now() + Duration::from_secs(301));
+    assert_eq!(evicted, 2);
     assert!(bounded.remove("k1").is_none());
     assert!(bounded.insert("k3".to_string(), 3).is_ok());
+
+    // 8. Server-mode delivery isolation:
+    //    - Unconfigured server fails closed with 503 delivery_unavailable and does not expose /_test/outbox
+    //    - LocalFileDelivery writes OTP delivery records locally and completes auth end-to-end
+    {
+        let unconf_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let unconf_addr = unconf_listener.local_addr()?;
+        let (unconf_app, _) =
+            build_app_with_delivery(unconf_addr.port(), Arc::new(UnconfiguredDelivery))?;
+        let unconf_handle = tokio::spawn(async move {
+            let _ = axum::serve(unconf_listener, unconf_app).await;
+        });
+        let unconf_base = format!("http://{unconf_addr}");
+
+        let outbox_probe = client
+            .get(format!("{unconf_base}/_test/outbox/otp/user1"))
+            .send()
+            .await?;
+        assert_eq!(outbox_probe.status(), StatusCode::NOT_FOUND);
+
+        let unconf_otp = client
+            .post(format!("{unconf_base}/auth/otp/request"))
+            .json(&serde_json::json!({
+                "subject": "unconfigured@example.com",
+                "channel": "email"
+            }))
+            .send()
+            .await?;
+        assert_eq!(unconf_otp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let unconf_err: serde_json::Value = unconf_otp.json().await?;
+        assert_eq!(unconf_err["error"], "delivery_unavailable");
+        unconf_handle.abort();
+    }
+
+    {
+        let delivery_path = std::env::temp_dir().join(format!(
+            "authkestra-passwordless-delivery-{}.ndjson",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_file(&delivery_path);
+
+        let srv_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let srv_addr = srv_listener.local_addr()?;
+        let (srv_app, _) = build_app_with_delivery(
+            srv_addr.port(),
+            Arc::new(LocalFileDelivery::new(&delivery_path)),
+        )?;
+        let srv_handle = tokio::spawn(async move {
+            let _ = axum::serve(srv_listener, srv_app).await;
+        });
+        let srv_base = format!("http://{srv_addr}");
+
+        let outbox_probe = client
+            .get(format!("{srv_base}/_test/outbox/otp/user1"))
+            .send()
+            .await?;
+        assert_eq!(outbox_probe.status(), StatusCode::NOT_FOUND);
+
+        let otp_req = client
+            .post(format!("{srv_base}/auth/otp/request"))
+            .json(&serde_json::json!({
+                "subject": "+15550001111",
+                "channel": "sms"
+            }))
+            .send()
+            .await?;
+        assert_eq!(otp_req.status(), StatusCode::OK);
+
+        let contents = std::fs::read_to_string(&delivery_path)?;
+        let _ = std::fs::remove_file(&delivery_path);
+        let record: serde_json::Value = serde_json::from_str(
+            contents
+                .lines()
+                .last()
+                .ok_or("expected delivered OTP record in delivery file")?,
+        )?;
+        assert_eq!(record["kind"], "otp");
+        assert_eq!(record["subject"], "+15550001111");
+        assert_eq!(record["channel"], "sms");
+        let code = record["secret"]
+            .as_str()
+            .ok_or("missing delivered OTP secret")?;
+
+        let otp_verify = client
+            .post(format!("{srv_base}/auth/otp/verify"))
+            .json(&serde_json::json!({
+                "subject": "+15550001111",
+                "code": code
+            }))
+            .send()
+            .await?;
+        assert_eq!(otp_verify.status(), StatusCode::OK);
+        assert!(otp_verify.headers().get(header::SET_COOKIE).is_some());
+        srv_handle.abort();
+    }
 
     Ok(())
 }
