@@ -5,7 +5,7 @@ Shared Signals Framework ingestion for the `authkestra` framework: validate Secu
 [OpenID CAEP 1.0](https://openid.net/specs/openid-caep-specification-1_0.html) events, and receive
 them over the [RFC 8935](https://www.rfc-editor.org/rfc/rfc8935) HTTP push delivery method.
 
-Part of [authkestra#25](https://github.com/marcjazz/authkestra/issues/25).
+Part of [authkestra#25](https://github.com/Authkestra/authkestra/issues/25).
 
 ## Status
 

@@ -1,6 +1,6 @@
 # authkestra-oidc
 
-OpenID Connect (OIDC) implementation for [authkestra](https://github.com/marcjazz/authkestra).
+OpenID Connect (OIDC) implementation for [authkestra](https://github.com/Authkestra/authkestra).
 
 This crate provides OIDC support for the `authkestra` framework, including automatic provider discovery, JWKS handling, and ID token validation. It implements the `OAuthProvider` trait from `authkestra-engine`, making it easy to integrate any OIDC-compliant provider into your application.
 
@@ -85,4 +85,4 @@ let provider = provider.with_validation(validation);
 
 ## Part of authkestra
 
-This crate is part of the [authkestra](https://github.com/marcjazz/authkestra) workspace.
+This crate is part of the [authkestra](https://github.com/Authkestra/authkestra) workspace.

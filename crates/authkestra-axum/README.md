@@ -1,6 +1,6 @@
 # authkestra-axum
 
-Axum integration for [authkestra](https://github.com/marcjazz/authkestra).
+Axum integration for [authkestra](https://github.com/Authkestra/authkestra).
 
 This crate provides Axum-specific extractors and helpers to easily integrate the `authkestra` authentication framework into Axum applications.
 
@@ -188,7 +188,7 @@ the verifier never produces in the same shape with `devsig::refusal_response`:
 when `identity.key_role()` is not `KeyRole::UserPresent`).
 
 See
-[`crates/authkestra/examples/axum_devsig/`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra/examples/axum_devsig)
+[`crates/authkestra/examples/axum_devsig/`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra/examples/axum_devsig)
 for a complete, runnable example (all examples live in the `authkestra` facade crate):
 
 ```bash
@@ -197,4 +197,4 @@ cargo run -p authkestra --example axum_devsig --all-features
 
 ## Part of authkestra
 
-This crate is part of the [authkestra](https://github.com/marcjazz/authkestra) workspace.
+This crate is part of the [authkestra](https://github.com/Authkestra/authkestra) workspace.

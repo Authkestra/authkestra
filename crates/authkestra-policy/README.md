@@ -5,7 +5,7 @@ A **proof-of-concept** authorization policy engine for the `authkestra` framewor
 "may you do this?" — in a policy language that lives outside the binary, instead of in
 hand-rolled `if role == "admin"` branches.
 
-Proposed in [authkestra#21](https://github.com/marcjazz/authkestra/issues/21). The full
+Proposed in [authkestra#21](https://github.com/Authkestra/authkestra/issues/21). The full
 integration plan is [`docs/rfc-008-policy-engine.md`](../../docs/rfc-008-policy-engine.md).
 
 ## Status: proof of concept

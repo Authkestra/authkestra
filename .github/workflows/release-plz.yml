@@ -12,6 +12,7 @@ on:
       - 'design/**'
       - 'docs/**'
       - '**.md'
+  workflow_dispatch:
 
 jobs:
   release-plz:
@@ -30,8 +31,29 @@ jobs:
       - name: Cache cargo registry and build
         uses: swatinem/rust-cache@v2
 
-      - name: Run release-plz
+      - name: Run release-plz release-pr
         uses: release-plz/action@v0.5
+        with:
+          command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Run release-plz release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Retry on transient crates.io sparse-index CDN propagation delays
+          # between publishing internal workspace crates and the facade crate.
+          for attempt in 1 2 3; do
+            if release-plz release --git-token "${GITHUB_TOKEN}" --forge github; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "release-plz release failed (attempt ${attempt}/3); waiting 30s before retry..."
+              sleep 30
+            fi
+          done
+          exit 1
