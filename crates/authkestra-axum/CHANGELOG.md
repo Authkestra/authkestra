@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2](https://github.com/Authkestra/authkestra/compare/authkestra-axum-v0.15.1...authkestra-axum-v0.15.2) - 2026-11-15
+
+### Added
+
+- *(op,devsig,examples)* complete client interop follow-ups, role minting & HTTP specs ([#450](https://github.com/Authkestra/authkestra/pull/450))
+
 ## [0.15.1](https://github.com/Authkestra/authkestra/compare/authkestra-axum-v0.15.0...authkestra-axum-v0.15.1) - 2026-11-14
 
 ### Added
