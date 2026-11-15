@@ -2,8 +2,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/authkestra.svg)](https://crates.io/crates/authkestra)
 [![Docs.rs](https://docs.rs/authkestra/badge.svg)](https://docs.rs/authkestra)
-[![CI](https://github.com/marcjazz/authkestra/actions/workflows/ci.yml/badge.svg)](https://github.com/marcjazz/authkestra/actions)
-[![License](https://img.shields.io/crates/l/authkestra.svg)](https://github.com/marcjazz/authkestra/blob/main/LICENSE-MIT)
+[![CI](https://github.com/Authkestra/authkestra/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Authkestra/authkestra/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates/l/authkestra.svg)](https://github.com/Authkestra/authkestra/blob/main/LICENSE-MIT)
 
 **The Compile-Time Safe Identity & AI Agent Authorization Engine for Rust**
 
@@ -180,4 +180,4 @@ cargo run -p authkestra --example axum_mcp_server --all-features
 
 ## 📜 License
 
-Dual-licensed under [MIT](https://github.com/marcjazz/authkestra/blob/main/LICENSE-MIT) or [Apache 2.0](https://github.com/marcjazz/authkestra/blob/main/LICENSE-APACHE) at your option.
+Dual-licensed under [MIT](https://github.com/Authkestra/authkestra/blob/main/LICENSE-MIT) or [Apache 2.0](https://github.com/Authkestra/authkestra/blob/main/LICENSE-APACHE) at your option.

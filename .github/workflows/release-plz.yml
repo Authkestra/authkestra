@@ -12,6 +12,7 @@ on:
       - 'design/**'
       - 'docs/**'
       - '**.md'
+  workflow_dispatch:
 
 jobs:
   release-plz:
@@ -30,8 +31,40 @@ jobs:
       - name: Cache cargo registry and build
         uses: swatinem/rust-cache@v2
 
-      - name: Run release-plz
+      - name: Run release-plz release-pr
         uses: release-plz/action@v0.5
+        with:
+          command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Run release-plz release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Retry only on transient crates.io sparse-index propagation delays
+          # between publishing internal workspace crates and the facade crate.
+          log_file="$(mktemp)"
+          trap 'rm -f "$log_file"' EXIT
+          for attempt in 1 2 3; do
+            set +e
+            release-plz release --git-token "${GITHUB_TOKEN}" --forge github >"$log_file" 2>&1
+            status=$?
+            set -e
+            cat "$log_file"
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if ! grep -q "failed to select a version for the requirement" "$log_file" \
+              || ! grep -q "location searched: crates.io index" "$log_file"; then
+              exit "$status"
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "crates.io sparse index lag detected (attempt ${attempt}/3); waiting 30s before retry..."
+              sleep 30
+            fi
+          done
+          exit "$status"

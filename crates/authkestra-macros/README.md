@@ -1,6 +1,6 @@
 # authkestra-macros
 
-Procedural macros for [authkestra](https://github.com/marcjazz/authkestra).
+Procedural macros for [authkestra](https://github.com/Authkestra/authkestra).
 
 This crate provides procedural macros to eliminate boilerplate code when integrating the `authkestra` authentication framework into web applications.
 
@@ -74,4 +74,4 @@ cause.
 
 ## Part of authkestra
 
-This crate is part of the [authkestra](https://github.com/marcjazz/authkestra) workspace.
+This crate is part of the [authkestra](https://github.com/Authkestra/authkestra) workspace.

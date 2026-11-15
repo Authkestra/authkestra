@@ -5,8 +5,8 @@
 
 # Authkestra
 
-[![CI](https://github.com/marcjazz/authkestra/actions/workflows/ci.yml/badge.svg)](https://github.com/marcjazz/authkestra/actions)
-[![Coverage](https://codecov.io/gh/marcjazz/authkestra/branch/main/graph/badge.svg)](https://codecov.io/gh/marcjazz/authkestra)
+[![CI](https://github.com/Authkestra/authkestra/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Authkestra/authkestra/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/Authkestra/authkestra/branch/main/graph/badge.svg)](https://codecov.io/gh/Authkestra/authkestra)
 [![Crates.io](https://img.shields.io/crates/v/authkestra.svg)](https://crates.io/crates/authkestra)
 [![Docs](https://docs.rs/authkestra/badge.svg)](https://docs.rs/authkestra)
 
@@ -80,22 +80,22 @@ check with `cargo tree -i aws-lc-rs -e features`.
 
 | Crate | Description |
 | --- | --- |
-| [`authkestra`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra)                     | **Primary Facade**: Re-exports all other crates behind features. Hosts the runnable examples. |
-| [`authkestra-engine`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-engine)       | Foundational types, traits and the **Engine** orchestrator.               |
-| [`authkestra-mcp`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-mcp)             | Embedded Model Context Protocol (MCP) security guard, RFC 8785 JCS cryptographic step-up approval, and zero-trust downstream token vault. |
-| [`authkestra-resource`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-resource)   | Resource server enforcement and validation (JWT, etc).                    |
-| [`authkestra-providers`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-providers) | Concrete implementation for OAuth providers (GitHub, Google, Discord).    |
-| [`authkestra-axum`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-axum)           | Axum-specific integration, including `AuthSession` extractors.            |
-| [`authkestra-actix`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-actix)         | Actix-specific integration, including `ActixState` macro support.         |
-| [`authkestra-oidc`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-oidc)           | OpenID Connect discovery and provider support.                            |
-| [`authkestra-op`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-op)               | OpenID Connect Provider (OP) implementation.                              |
-| [`authkestra-devsig`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-devsig)       | Device-bound signature authentication (proof-of-possession + Issuer attestation). |
-| [`authkestra-crypto-util`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-crypto-util) | Shared strict signature/key verification helpers used by the OP and devsig crates. |
-| [`authkestra-policy`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-policy)       | **Proof of concept** ([#21](https://github.com/marcjazz/authkestra/issues/21)): AWS Cedar authorization policies, not yet wired into any guard. |
-| [`authkestra-ssf`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-ssf)             | Shared Signals Framework: Security Event Token (RFC 8417) ingestion and CAEP events. |
-| [`authkestra-store-sqlx`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-store-sqlx) | `OpStore` backed by `sqlx` (PostgreSQL, MySQL, SQLite).                  |
-| [`authkestra-store-testsuite`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-store-testsuite) | Shared conformance suites a store implementation runs against, so a third-party backend can prove it honours the traits' atomicity contracts. |
-| [`authkestra-macros`](https://github.com/marcjazz/authkestra/tree/main/crates/authkestra-macros)       | Procedural macros for simplifying Authkestra integration.                 |
+| [`authkestra`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra)                     | **Primary Facade**: Re-exports all other crates behind features. Hosts the runnable examples. |
+| [`authkestra-engine`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-engine)       | Foundational types, traits and the **Engine** orchestrator.               |
+| [`authkestra-mcp`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-mcp)             | Embedded Model Context Protocol (MCP) security guard, RFC 8785 JCS cryptographic step-up approval, and zero-trust downstream token vault. |
+| [`authkestra-resource`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-resource)   | Resource server enforcement and validation (JWT, etc).                    |
+| [`authkestra-providers`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-providers) | Concrete implementation for OAuth providers (GitHub, Google, Discord).    |
+| [`authkestra-axum`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-axum)           | Axum-specific integration, including `AuthSession` extractors.            |
+| [`authkestra-actix`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-actix)         | Actix-specific integration, including `ActixState` macro support.         |
+| [`authkestra-oidc`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-oidc)           | OpenID Connect discovery and provider support.                            |
+| [`authkestra-op`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-op)               | OpenID Connect Provider (OP) implementation.                              |
+| [`authkestra-devsig`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-devsig)       | Device-bound signature authentication (proof-of-possession + Issuer attestation). |
+| [`authkestra-crypto-util`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-crypto-util) | Shared strict signature/key verification helpers used by the OP and devsig crates. |
+| [`authkestra-policy`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-policy)       | **Proof of concept** ([#21](https://github.com/Authkestra/authkestra/issues/21)): AWS Cedar authorization policies, not yet wired into any guard. |
+| [`authkestra-ssf`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-ssf)             | Shared Signals Framework: Security Event Token (RFC 8417) ingestion and CAEP events. |
+| [`authkestra-store-sqlx`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-store-sqlx) | `OpStore` backed by `sqlx` (PostgreSQL, MySQL, SQLite).                  |
+| [`authkestra-store-testsuite`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-store-testsuite) | Shared conformance suites a store implementation runs against, so a third-party backend can prove it honours the traits' atomicity contracts. |
+| [`authkestra-macros`](https://github.com/Authkestra/authkestra/tree/main/crates/authkestra-macros)       | Procedural macros for simplifying Authkestra integration.                 |
 
 ## 🛠️ Usage
 
@@ -154,10 +154,10 @@ are Axum-only today and have **no** Actix twin: `axum_mcp_server`, `axum_mfa_ser
 Four protocol-level examples live in `authkestra-engine` instead, because they need no web
 framework at all:
 
-- [Client Credentials Flow](https://github.com/marcjazz/authkestra/blob/main/crates/authkestra-engine/examples/client_credentials.rs): `cargo run -p authkestra-engine --example client_credentials`
-- [Device Flow](https://github.com/marcjazz/authkestra/blob/main/crates/authkestra-engine/examples/device_flow.rs): `cargo run -p authkestra-engine --example device_flow`
-- [SD-JWT (Selective Disclosure)](https://github.com/marcjazz/authkestra/blob/main/crates/authkestra-engine/examples/sd_jwt.rs): `cargo run -p authkestra-engine --example sd_jwt`
-- [TOTP enrolment and verification](https://github.com/marcjazz/authkestra/blob/main/crates/authkestra-engine/examples/totp_webauthn.rs) (named `totp_webauthn`, but it exercises the TOTP path only): `cargo run -p authkestra-engine --example totp_webauthn --features totp,sql-sqlite`
+- [Client Credentials Flow](https://github.com/Authkestra/authkestra/blob/main/crates/authkestra-engine/examples/client_credentials.rs): `cargo run -p authkestra-engine --example client_credentials`
+- [Device Flow](https://github.com/Authkestra/authkestra/blob/main/crates/authkestra-engine/examples/device_flow.rs): `cargo run -p authkestra-engine --example device_flow`
+- [SD-JWT (Selective Disclosure)](https://github.com/Authkestra/authkestra/blob/main/crates/authkestra-engine/examples/sd_jwt.rs): `cargo run -p authkestra-engine --example sd_jwt`
+- [TOTP enrolment and verification](https://github.com/Authkestra/authkestra/blob/main/crates/authkestra-engine/examples/totp_webauthn.rs) (named `totp_webauthn`, but it exercises the TOTP path only): `cargo run -p authkestra-engine --example totp_webauthn --features totp,sql-sqlite`
 
 ## 🏗️ Technical Design Principles
 
@@ -233,7 +233,7 @@ The `authkestra` facade crate exposes granular features matching each deployment
 
 This project is dual-licensed under either:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/marcjazz/authkestra/blob/main/LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](https://github.com/marcjazz/authkestra/blob/main/LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/Authkestra/authkestra/blob/main/LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](https://github.com/Authkestra/authkestra/blob/main/LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.

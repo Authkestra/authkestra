@@ -4,7 +4,7 @@ Device-bound signature authentication for the `authkestra` framework: per-reques
 possession of a device-bound private key, plus an Issuer-attested key binding, so that
 verification needs no session store, no token introspection, and no per-request network call.
 
-Proposed in [authkestra#137](https://github.com/marcjazz/authkestra/issues/137). See the crate
+Proposed in [authkestra#137](https://github.com/Authkestra/authkestra/issues/137). See the crate
 docs (`cargo doc -p authkestra-devsig --open`) for the full algorithm, the two credentials
 (`X-Signature` and `X-Attestation`), and why the key-thumbprint binding check is the
 security-critical step.
@@ -51,7 +51,7 @@ let identity = verify(&request, &config, &jwks, &replay_store).await?;
 expression. `DeviceIdentity::new(subject, device, key_thumbprint, attributes)` exists so that the
 mapping from a verified identity onto your own principal/session type — where the
 security-relevant defaults live, such as what an absent `role` attribute grants — stays unit
-testable without minting a real attestation ([authkestra#282](https://github.com/marcjazz/authkestra/issues/282)):
+testable without minting a real attestation ([authkestra#282](https://github.com/Authkestra/authkestra/issues/282)):
 
 ```rust,ignore
 let identity = DeviceIdentity::new(

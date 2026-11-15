@@ -24,7 +24,7 @@ members = [
 [workspace.package]
 edition = "2021"
 version = "0.15.2"
-repository = "https://github.com/marcjazz/authkestra"
+repository = "https://github.com/Authkestra/authkestra"
 license = "MIT OR Apache-2.0"
 keywords = ["authentication", "oauth2", "oidc", "webauthn", "passwordless"]
 categories = ["authentication", "web-programming"]
