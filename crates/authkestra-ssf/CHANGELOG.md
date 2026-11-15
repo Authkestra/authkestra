@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3](https://github.com/Authkestra/authkestra/compare/authkestra-ssf-v0.15.2...authkestra-ssf-v0.15.3) - 2026-11-15
+
+### Other
+
+- fix CI badge links and harden release-plz workflow ([#453](https://github.com/Authkestra/authkestra/pull/453))
+
 ## [0.15.0](https://github.com/Authkestra/authkestra/compare/authkestra-ssf-v0.14.0...authkestra-ssf-v0.15.0) - 2026-11-07
 
 ### Fixed
