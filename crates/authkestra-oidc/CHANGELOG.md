@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3](https://github.com/Authkestra/authkestra/compare/authkestra-oidc-v0.15.2...authkestra-oidc-v0.15.3) - 2026-11-15
+
+### Other
+
+- fix CI badge links and harden release-plz workflow ([#453](https://github.com/Authkestra/authkestra/pull/453))
+
 ## [0.13.1](https://github.com/marcjazz/authkestra/compare/authkestra-oidc-v0.13.0...authkestra-oidc-v0.13.1) - 2026-09-26
 
 ### Other
